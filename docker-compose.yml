@@ -1,0 +1,112 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: murderer
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # One-shot: runs migrations + seeds the source-reputation table, then exits.
+  # `docker compose up migrate` (or it runs once via `depends_on` below and
+  # stays exited — that's expected, not a crash).
+  migrate:
+    build: .
+    command: ["migrate"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/murderer
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    # CPU-only (no GPU reservation block below) — fine for this MVP, just
+    # expect qwen3:8b generations to be slower than on a GPU box. Add a
+    # `deploy.resources.reservations.devices` NVIDIA block later if you get one.
+
+  # One-shot: pulls the models this project needs into the ollama_data volume,
+  # then exits. Re-run anytime with `docker compose run --rm ollama-pull`
+  # (e.g. after wiping the volume, or to grab a model added later).
+  ollama-pull:
+    image: ollama/ollama:latest
+    entrypoint: ["sh", "-c"]
+    command: ["ollama pull qwen3:4b && ollama pull qwen3:8b && ollama pull nomic-embed-text"]
+    environment:
+      OLLAMA_HOST: ollama:11434
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build: .
+    command: ["api"]
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/murderer
+      REDIS_URL: redis://redis:6379/0
+      OLLAMA_HOST: http://ollama:11434
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      ollama-pull:
+        condition: service_completed_successfully
+
+  worker:
+    build: .
+    command: ["worker"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/murderer
+      REDIS_URL: redis://redis:6379/0
+      OLLAMA_HOST: http://ollama:11434
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      ollama-pull:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:
+  ollama_data:
