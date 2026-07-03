@@ -27,9 +27,10 @@ async def scrape_urls(urls: list[str], timeout_ms: int, concurrency: int) -> dic
 
         async def _scrape_one(url: str) -> None:
             async with semaphore:
-                context = await browser.new_context(user_agent=USER_AGENT)
-                page = await context.new_page()
+                context = None
                 try:
+                    context = await browser.new_context(user_agent=USER_AGENT)
+                    page = await context.new_page()
                     await page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
                     final_url = page.url
                     html = await page.content()
@@ -42,10 +43,13 @@ async def scrape_urls(urls: list[str], timeout_ms: int, concurrency: int) -> dic
                 except Exception as exc:  # noqa: BLE001 — any single-page failure must not abort the batch
                     results[url] = {"final_url": url, "text": "", "success": False, "error": str(exc)}
                 finally:
-                    await context.close()
+                    if context is not None:
+                        await context.close()
 
         try:
-            await asyncio.gather(*(_scrape_one(u) for u in urls))
+            # return_exceptions=True so one task's unhandled exception can't cancel
+            # its siblings — each task already writes its own outcome into `results`.
+            await asyncio.gather(*(_scrape_one(u) for u in urls), return_exceptions=True)
         finally:
             await browser.close()
 

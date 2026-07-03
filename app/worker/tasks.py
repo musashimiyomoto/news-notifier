@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit
 
 from sqlalchemy import select
 
@@ -14,8 +15,12 @@ from app.llm.extraction import extract_and_score
 from app.llm.query_gen import generate_queries
 from app.scoring.credibility import compute_credibility
 from app.scraping.playwright_scraper import scrape_urls
-from app.search.aggregator import parse_published_at, search_all_sources
+from app.search.aggregator import parse_published_at, search_all_sources, url_hash
 from app.security import decrypt_secret
+
+
+def _domain_of(url: str) -> str:
+    return urlsplit(url).netloc.removeprefix("www.")
 
 # Adaptive polling: the closer resolution_date is, the more often we look.
 # Tiers are (max_time_remaining, poll_step); default_minutes is the fallback
@@ -80,9 +85,19 @@ async def process_market(ctx: dict, market_id: str) -> None:
                 if not scrape_result or not scrape_result["success"]:
                     continue
 
-                extracted = await extract_and_score(
-                    market.description, scrape_result["text"], candidate.get("source_domain") or ""
-                )
+                # Hash/domain must come from the post-redirect final_url, not the
+                # pre-scrape search-result URL (Google News RSS links are redirects,
+                # and DDG/Google News "source" fields are display names, not domains).
+                final_hash = url_hash(scrape_result["final_url"])
+                if final_hash in existing_hashes:
+                    continue
+                domain = _domain_of(scrape_result["final_url"])
+
+                try:
+                    extracted = await extract_and_score(market.description, scrape_result["text"], domain)
+                except Exception:
+                    # One flaky/malformed LLM call must not abort the whole batch.
+                    continue
                 if not extracted or not extracted.get("is_relevant"):
                     continue
 
@@ -94,14 +109,16 @@ async def process_market(ctx: dict, market_id: str) -> None:
                 ):
                     continue  # near-duplicate title already accepted in this same batch
 
-                embedding = await embed_text(extracted["summary"])
+                try:
+                    embedding = await embed_text(extracted["summary"])
+                except Exception:
+                    continue
                 similar = await find_similar(session, market.id, embedding, settings.vector_dedup_threshold)
                 if similar is not None:
                     continue  # semantic duplicate of a news item already stored for this market
 
-                credibility = await compute_credibility(
-                    session, candidate.get("source_domain") or "", extracted["credibility_signal"]
-                )
+                credibility = await compute_credibility(session, domain, extracted["credibility_signal"])
+                relevance = max(0.0, min(1.0, extracted["relevance_score"]))
 
                 try:
                     impact_hint = ImpactHint(extracted["impact_hint"])
@@ -113,25 +130,26 @@ async def process_market(ctx: dict, market_id: str) -> None:
                 item = NewsItem(
                     market_id=market.id,
                     url=scrape_result["final_url"],
-                    canonical_url_hash=candidate["canonical_url_hash"],
+                    canonical_url_hash=final_hash,
                     title_simhash=title_hash,
                     title=title,
                     summary=extracted["summary"],
                     proofs=extracted.get("proofs", []),
-                    source_domain=candidate.get("source_domain") or "",
+                    source_domain=domain,
                     published_at=parse_published_at(candidate.get("published_at")),
                     credibility_score=credibility,
-                    relevance_score=extracted["relevance_score"],
+                    relevance_score=relevance,
                     impact_hint=impact_hint,
                     embedding=embedding,
                 )
                 session.add(item)
                 new_items.append(item)
                 batch_title_hashes.append(title_hash)
+                existing_hashes.add(final_hash)
 
         market.last_polled_at = datetime.now(timezone.utc)
         market.next_poll_at = _next_poll_at(
-            market.resolution_date, market.last_polled_at, settings.default_poll_interval_minutes
+            market.resolution_date, market.last_polled_at, market.poll_interval_minutes
         )
 
         if not new_items:

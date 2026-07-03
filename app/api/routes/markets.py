@@ -37,7 +37,11 @@ async def subscribe(
 
     # Trigger a first run right away instead of waiting for the scheduler tick,
     # so a fresh subscription gets a backfill batch on day one, not a day later.
-    await request.app.state.redis.enqueue_job("process_market", str(market.id))
+    # _job_id dedups against the scheduler cron picking up the same market
+    # (next_poll_at=now, above) before this run's commit advances it.
+    await request.app.state.redis.enqueue_job(
+        "process_market", str(market.id), _job_id=f"process_market:{market.id}"
+    )
 
     return MarketResponse(
         market_id=market.external_market_id,

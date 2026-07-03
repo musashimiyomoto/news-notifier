@@ -1,5 +1,7 @@
 from functools import lru_cache
 
+from cryptography.fernet import Fernet
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,7 +22,23 @@ class Settings(BaseSettings):
     # Security — Fernet key used to encrypt callback_secret at rest.
     # We need it retrievable (not just hashed) to compute the HMAC signature
     # on outgoing webhooks, so it's symmetrically encrypted, not one-way hashed.
-    secret_encryption_key: str = "change-me-generate-a-fernet-key"
+    # This default is a valid Fernet key so the app runs out of the box for
+    # local dev/tests, but it's public (checked into source) — never use it
+    # in anything reachable from outside your machine. Generate a real one
+    # for staging/prod (see the validator below for the command).
+    secret_encryption_key: str = "oMzYJ7UzyUqHOowktrH_dHkBBwMbW9QS_QGcoJMeHbU="
+
+    @field_validator("secret_encryption_key")
+    @classmethod
+    def _validate_fernet_key(cls, value: str) -> str:
+        try:
+            Fernet(value.encode())
+        except Exception as exc:
+            raise ValueError(
+                "SECRET_ENCRYPTION_KEY is not a valid Fernet key. Generate one with: "
+                'python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"'
+            ) from exc
+        return value
 
     # Scheduling
     default_poll_interval_minutes: int = 24 * 60

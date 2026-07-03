@@ -36,7 +36,7 @@ def parse_published_at(value: object) -> datetime | None:
 
 def normalize_url(url: str) -> str:
     parts = urlsplit(url)
-    query = [(k, v) for k, v in parse_qsl(parts.query) if k.lower() not in TRACKING_PARAMS]
+    query = sorted((k, v) for k, v in parse_qsl(parts.query) if k.lower() not in TRACKING_PARAMS)
     normalized = parts._replace(query=urlencode(query), fragment="")
     return urlunsplit(normalized).rstrip("/")
 

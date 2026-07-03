@@ -27,3 +27,9 @@ def test_url_hash_is_stable_across_equivalent_urls():
     a = "https://example.com/article?utm_source=twitter&id=42"
     b = "https://example.com/article?id=42&utm_source=facebook"
     assert url_hash(a) == url_hash(b)
+
+
+def test_normalize_url_ignores_non_tracking_param_order():
+    a = "https://example.com/article?id=5&cat=news"
+    b = "https://example.com/article?cat=news&id=5"
+    assert normalize_url(a) == normalize_url(b)
