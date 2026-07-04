@@ -26,7 +26,11 @@ EMBEDDING_DIM = 768
 def upgrade() -> None:
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
-    market_status = postgresql.ENUM("active", "paused", "resolved", name="market_status")
+    # create_type=False: these are created explicitly below via .create(checkfirst=True).
+    # Without it, op.create_table's own DDL visitor tries to CREATE TYPE again
+    # (without checking first) as soon as the enum is used as a column type,
+    # raising DuplicateObjectError against the type we just created.
+    market_status = postgresql.ENUM("active", "paused", "resolved", name="market_status", create_type=False)
     reliability_tier = postgresql.ENUM(
         "tier1_official",
         "tier2_major_media",
@@ -34,9 +38,14 @@ def upgrade() -> None:
         "tier4_social_blog",
         "unknown",
         name="reliability_tier",
+        create_type=False,
     )
-    impact_hint = postgresql.ENUM("supports_yes", "supports_no", "neutral", "ambiguous", name="impact_hint")
-    delivery_status = postgresql.ENUM("pending", "success", "failed", "dead_letter", name="delivery_status")
+    impact_hint = postgresql.ENUM(
+        "supports_yes", "supports_no", "neutral", "ambiguous", name="impact_hint", create_type=False
+    )
+    delivery_status = postgresql.ENUM(
+        "pending", "success", "failed", "dead_letter", name="delivery_status", create_type=False
+    )
 
     bind = op.get_bind()
     market_status.create(bind, checkfirst=True)
