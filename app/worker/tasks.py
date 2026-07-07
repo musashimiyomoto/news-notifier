@@ -7,7 +7,7 @@ from sqlalchemy import select
 from app.config import get_settings
 from app.db.models import DeliveryLog, DeliveryStatus, ImpactHint, Market, MarketStatus, NewsItem
 from app.db.session import async_session_factory
-from app.dedup.simhash import hamming_distance, simhash
+from app.dedup.simhash import hamming_distance, simhash, to_signed_64
 from app.dedup.vector_dedup import find_similar
 from app.delivery.webhook import send_webhook
 from app.llm.embeddings import embed_text
@@ -131,7 +131,7 @@ async def process_market(ctx: dict, market_id: str) -> None:
                     market_id=market.id,
                     url=scrape_result["final_url"],
                     canonical_url_hash=final_hash,
-                    title_simhash=title_hash,
+                    title_simhash=to_signed_64(title_hash),
                     title=title,
                     summary=extracted["summary"],
                     proofs=extracted.get("proofs", []),

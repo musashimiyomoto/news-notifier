@@ -19,7 +19,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
-EMBEDDING_DIM = 768  # must match app.config.Settings.embedding_dim / the embedding model used
+EMBEDDING_DIM = 384  # must match app.config.Settings.embedding_dim / the FastEmbed model used
 
 
 class Base(DeclarativeBase):

@@ -32,3 +32,10 @@ def simhash(text: str, bits: int = 64) -> int:
 
 def hamming_distance(a: int, b: int) -> int:
     return bin(a ^ b).count("1")
+
+
+def to_signed_64(fingerprint: int) -> int:
+    """Reinterpret an unsigned 64-bit simhash as signed, for storage in a
+    BigInteger column (Postgres int8 is signed; simhash's top bit can be
+    set, which would otherwise overflow it)."""
+    return fingerprint - (1 << 64) if fingerprint >= (1 << 63) else fingerprint

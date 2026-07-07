@@ -17,10 +17,10 @@ down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-# Must match app.db.models.EMBEDDING_DIM / the embedding model's output size
-# (nomic-embed-text = 768). Changing embedding models later means a new
+# Must match app.db.models.EMBEDDING_DIM / the FastEmbed model's output size
+# (BAAI/bge-small-en-v1.5 = 384). Changing embedding models later means a new
 # migration to alter this column's dimension.
-EMBEDDING_DIM = 768
+EMBEDDING_DIM = 384
 
 
 def upgrade() -> None:

@@ -28,13 +28,3 @@ class OpenRouterClient:
             resp.raise_for_status()
             data = resp.json()
         return json.loads(data["choices"][0]["message"]["content"])
-
-    async def embed(self, model: str, text: str, dimensions: int) -> list[float]:
-        settings = get_settings()
-        payload = {"model": model, "input": text, "dimensions": dimensions}
-        headers = {"Authorization": f"Bearer {settings.openrouter_api_key}"}
-        async with httpx.AsyncClient(base_url=settings.openrouter_base_url, timeout=60) as client:
-            resp = await client.post("/embeddings", json=payload, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
-        return data["data"][0]["embedding"]

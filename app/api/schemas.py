@@ -32,3 +32,16 @@ class MarketResponse(BaseModel):
     status: str
     next_poll_at: datetime
     created_at: datetime
+
+
+class NewsItemResponse(BaseModel):
+    id: str
+    title: str
+    summary: str
+    url: str
+    source_domain: str
+    published_at: datetime | None = None
+    credibility_score: float
+    relevance_score: float
+    impact_hint: str
+    proofs: list[dict]

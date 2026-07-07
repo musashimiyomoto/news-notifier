@@ -4,13 +4,68 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.schemas import MarketResponse, MarketSubscribeRequest, MarketUpdateRequest
+from app.api.schemas import (
+    MarketResponse,
+    MarketSubscribeRequest,
+    MarketUpdateRequest,
+    NewsItemResponse,
+)
 from app.config import get_settings
-from app.db.models import Market, MarketStatus
+from app.db.models import Market, MarketStatus, NewsItem
 from app.db.session import get_session
 from app.security import encrypt_secret
 
 router = APIRouter(prefix="/markets", tags=["markets"])
+
+
+@router.get("/{market_id}", response_model=MarketResponse)
+async def get_market(market_id: str, session: AsyncSession = Depends(get_session)) -> MarketResponse:
+    market = (
+        await session.execute(select(Market).where(Market.external_market_id == market_id))
+    ).scalar_one_or_none()
+    if market is None:
+        raise HTTPException(404, "Market not found")
+
+    return MarketResponse(
+        market_id=market.external_market_id,
+        status=market.status.value,
+        next_poll_at=market.next_poll_at,
+        created_at=market.created_at,
+    )
+
+
+@router.get("/{market_id}/news", response_model=list[NewsItemResponse])
+async def list_market_news(
+    market_id: str, session: AsyncSession = Depends(get_session)
+) -> list[NewsItemResponse]:
+    market = (
+        await session.execute(select(Market).where(Market.external_market_id == market_id))
+    ).scalar_one_or_none()
+    if market is None:
+        raise HTTPException(404, "Market not found")
+
+    result = await session.execute(
+        select(NewsItem)
+        .where(NewsItem.market_id == market.id)
+        .order_by(NewsItem.discovered_at.desc())
+    )
+    news_items = result.scalars().all()
+
+    return [
+        NewsItemResponse(
+            id=str(news_item.id),
+            title=news_item.title,
+            summary=news_item.summary,
+            url=news_item.url,
+            source_domain=news_item.source_domain,
+            published_at=news_item.published_at,
+            credibility_score=news_item.credibility_score,
+            relevance_score=news_item.relevance_score,
+            impact_hint=news_item.impact_hint.value,
+            proofs=news_item.proofs,
+        )
+        for news_item in news_items
+    ]
 
 
 @router.post("/subscribe", response_model=MarketResponse, status_code=201)

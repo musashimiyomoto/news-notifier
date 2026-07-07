@@ -1,8 +1,19 @@
+import asyncio
+from functools import lru_cache
+
+from fastembed import TextEmbedding
+
 from app.config import get_settings
-from app.llm.client import OpenRouterClient
+
+
+@lru_cache
+def _model() -> TextEmbedding:
+    return TextEmbedding(model_name=get_settings().embedding_model)
 
 
 async def embed_text(text: str) -> list[float]:
-    settings = get_settings()
-    client = OpenRouterClient()
-    return await client.embed(settings.embedding_model, text[:4000], dimensions=settings.embedding_dim)
+    return await asyncio.to_thread(_embed_sync, text[:4000])
+
+
+def _embed_sync(text: str) -> list[float]:
+    return next(_model().embed([text])).tolist()

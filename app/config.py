@@ -17,8 +17,12 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     llm_query_gen_model: str = "openai/gpt-4o-mini"
     llm_extraction_model: str = "openai/gpt-4o-mini"
-    embedding_model: str = "openai/text-embedding-3-small"
-    embedding_dim: int = 768
+
+    # Embeddings — computed locally via FastEmbed (ONNX), no external API call.
+    # Changing the model changes embedding_dim, which requires a new migration
+    # to alter app.db.models.EMBEDDING_DIM / the news_items.embedding column.
+    embedding_model: str = "BAAI/bge-small-en-v1.5"
+    embedding_dim: int = 384
 
     # Security — Fernet key used to encrypt callback_secret at rest.
     # We need it retrievable (not just hashed) to compute the HMAC signature
