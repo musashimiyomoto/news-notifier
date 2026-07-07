@@ -71,5 +71,18 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # arq job monitoring UI — reads worker/scheduler queue state straight out of
+  # Redis, no changes to the worker itself. https://github.com/antonko/arq-ui
+  arq-ui:
+    image: antonk0/arq-ui
+    ports:
+      - "8001:8000"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      redis:
+        condition: service_healthy
+
 volumes:
   pgdata:
