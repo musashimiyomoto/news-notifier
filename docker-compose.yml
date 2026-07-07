@@ -25,20 +25,8 @@ services:
       timeout: 5s
       retries: 10
 
-  # One-shot: runs migrations + seeds the source-reputation table, then exits.
-  # `docker compose up migrate` (or it runs once via `depends_on` below and
-  # stays exited — that's expected, not a crash).
-  migrate:
-    build: .
-    command: ["migrate"]
-    environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/murderer
-    env_file: .env
-    depends_on:
-      postgres:
-        condition: service_healthy
-    restart: "no"
-
+  # api runs `alembic upgrade head` + seeds on startup (see docker-entrypoint.sh),
+  # so there's no separate migrate service anymore.
   api:
     build: .
     command: ["api"]
@@ -53,8 +41,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
 
   worker:
     build: .
@@ -68,8 +54,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
+      # api applies migrations before it reports healthy-ish; start worker after it
+      # so the schema exists by the time jobs run.
+      api:
+        condition: service_started
 
   # arq job monitoring UI — reads worker/scheduler queue state straight out of
   # Redis, no changes to the worker itself. https://github.com/antonko/arq-ui
