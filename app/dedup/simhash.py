@@ -39,3 +39,11 @@ def to_signed_64(fingerprint: int) -> int:
     BigInteger column (Postgres int8 is signed; simhash's top bit can be
     set, which would otherwise overflow it)."""
     return fingerprint - (1 << 64) if fingerprint >= (1 << 63) else fingerprint
+
+
+def from_signed_64(value: int) -> int:
+    """Inverse of to_signed_64: reinterpret a signed int8 read back from the
+    BigInteger column as the original unsigned 64-bit simhash. Required before
+    hamming_distance, which XORs in Python's arbitrary-precision two's
+    complement and would miscount bits on a negative operand."""
+    return value & ((1 << 64) - 1)

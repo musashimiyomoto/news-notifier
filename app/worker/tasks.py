@@ -2,12 +2,12 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.config import get_settings
 from app.db.models import DeliveryLog, DeliveryStatus, ImpactHint, Market, MarketStatus, NewsItem
 from app.db.session import async_session_factory
-from app.dedup.simhash import hamming_distance, simhash, to_signed_64
+from app.dedup.simhash import from_signed_64, hamming_distance, simhash, to_signed_64
 from app.dedup.vector_dedup import find_similar
 from app.delivery.webhook import send_webhook
 from app.llm.embeddings import embed_text
@@ -21,6 +21,13 @@ from app.security import decrypt_secret
 
 def _domain_of(url: str) -> str:
     return urlsplit(url).netloc.removeprefix("www.")
+
+
+def _market_lock_key(market_id: uuid.UUID) -> int:
+    """Stable signed-int8 key for pg_advisory_xact_lock, derived from the market
+    UUID. Serializes the dedup-check-and-insert of concurrent process_candidate
+    jobs for the same market so parallel workers can't slip in near-duplicates."""
+    return to_signed_64(market_id.int & ((1 << 64) - 1))
 
 # Adaptive polling: the closer resolution_date is, the more often we look.
 # Tiers are (max_time_remaining, poll_step); default_minutes is the fallback
@@ -49,10 +56,13 @@ def _next_poll_at(resolution_date: datetime | None, now: datetime, default_minut
 
 
 async def process_market(ctx: dict, market_id: str) -> None:
-    """Search -> scrape -> extract/score -> dedup -> store. Enqueues a separate
-    deliver_batch job for the webhook instead of sending inline, so a delivery
-    failure retries just the send — not the whole (expensive, non-idempotent-once-
-    stored) search+extraction pipeline."""
+    """Dispatcher: generate queries -> search -> filter fresh candidates -> fan out
+    one process_candidate job per URL. Deliberately does NO scraping or LLM
+    extraction itself — those are the slow, per-article steps that used to run
+    serially in one job and blow past job_timeout on a market's first cycle
+    (where every candidate is fresh). Keeping only the bounded query+search work
+    here means this job stays fast, and each article is generated (and its webhook
+    fired) independently rather than waiting on the whole batch."""
     settings = get_settings()
 
     async with async_session_factory() as session:
@@ -72,98 +82,126 @@ async def process_market(ctx: dict, market_id: str) -> None:
         )
         fresh_candidates = [c for c in candidates if c["canonical_url_hash"] not in existing_hashes]
 
-        new_items: list[NewsItem] = []
-
-        if fresh_candidates:
-            scraped = await scrape_urls(
-                [c["url"] for c in fresh_candidates], settings.playwright_timeout_ms, settings.scrape_concurrency
-            )
-            batch_title_hashes: list[int] = []
-
-            for candidate in fresh_candidates:
-                scrape_result = scraped.get(candidate["url"])
-                if not scrape_result or not scrape_result["success"]:
-                    continue
-
-                # Hash/domain must come from the post-redirect final_url, not the
-                # pre-scrape search-result URL (Google News RSS links are redirects,
-                # and DDG/Google News "source" fields are display names, not domains).
-                final_hash = url_hash(scrape_result["final_url"])
-                if final_hash in existing_hashes:
-                    continue
-                domain = _domain_of(scrape_result["final_url"])
-
-                try:
-                    extracted = await extract_and_score(market.description, scrape_result["text"], domain)
-                except Exception:
-                    # One flaky/malformed LLM call must not abort the whole batch.
-                    continue
-                if not extracted or not extracted.get("is_relevant"):
-                    continue
-
-                title = extracted["title"]
-                title_hash = simhash(title)
-                if any(
-                    hamming_distance(title_hash, seen) <= settings.simhash_hamming_threshold
-                    for seen in batch_title_hashes
-                ):
-                    continue  # near-duplicate title already accepted in this same batch
-
-                try:
-                    embedding = await embed_text(extracted["summary"])
-                except Exception:
-                    continue
-                similar = await find_similar(session, market.id, embedding, settings.vector_dedup_threshold)
-                if similar is not None:
-                    continue  # semantic duplicate of a news item already stored for this market
-
-                credibility = await compute_credibility(session, domain, extracted["credibility_signal"])
-                relevance = max(0.0, min(1.0, extracted["relevance_score"]))
-
-                try:
-                    impact_hint = ImpactHint(extracted["impact_hint"])
-                except ValueError:
-                    # LLM structured output is schema-constrained but not immune to
-                    # returning an unexpected value under load — fail soft, not hard.
-                    impact_hint = ImpactHint.ambiguous
-
-                item = NewsItem(
-                    market_id=market.id,
-                    url=scrape_result["final_url"],
-                    canonical_url_hash=final_hash,
-                    title_simhash=to_signed_64(title_hash),
-                    title=title,
-                    summary=extracted["summary"],
-                    proofs=extracted.get("proofs", []),
-                    source_domain=domain,
-                    published_at=parse_published_at(candidate.get("published_at")),
-                    credibility_score=credibility,
-                    relevance_score=relevance,
-                    impact_hint=impact_hint,
-                    embedding=embedding,
-                )
-                session.add(item)
-                new_items.append(item)
-                batch_title_hashes.append(title_hash)
-                existing_hashes.add(final_hash)
-
         market.last_polled_at = datetime.now(timezone.utc)
         market.next_poll_at = _next_poll_at(
             market.resolution_date, market.last_polled_at, market.poll_interval_minutes
         )
+        await session.commit()
 
-        if not new_items:
-            await session.commit()
+    redis = ctx["redis"]
+    for candidate in fresh_candidates:
+        # _job_id dedups a re-enqueue of the same URL across overlapping cycles
+        # (same idea as scheduler.enqueue_due_markets), so a candidate that's slow
+        # to process isn't picked up twice by the next poll tick.
+        await redis.enqueue_job(
+            "process_candidate",
+            market_id,
+            candidate,
+            _job_id=f"process_candidate:{market_id}:{candidate['canonical_url_hash']}",
+        )
+
+
+async def process_candidate(ctx: dict, market_id: str, candidate: dict) -> None:
+    """Heavy per-URL job: scrape -> extract/score -> embed -> dedup -> store one
+    NewsItem, then enqueue its own single-item deliver_batch. Runs independently
+    per article so one slow/flaky LLM call can't stall (or time out) the others.
+
+    Cross-job dedup that the old serial loop got for free (in-batch title simhash,
+    incremental vector dedup) is done here against the DB under a per-market
+    advisory lock, so two concurrent candidate jobs for the same market can't
+    both slip in a near-duplicate."""
+    settings = get_settings()
+
+    async with async_session_factory() as session:
+        market = await session.get(Market, uuid.UUID(market_id))
+        if market is None or market.status != MarketStatus.active:
             return
 
+        scraped = await scrape_urls(
+            [candidate["url"]], settings.playwright_timeout_ms, settings.scrape_concurrency
+        )
+        scrape_result = scraped.get(candidate["url"])
+        if not scrape_result or not scrape_result["success"]:
+            return
+
+        # Hash/domain must come from the post-redirect final_url, not the
+        # pre-scrape search-result URL (Google News RSS links are redirects,
+        # and DDG/Google News "source" fields are display names, not domains).
+        final_hash = url_hash(scrape_result["final_url"])
+        domain = _domain_of(scrape_result["final_url"])
+
+        try:
+            extracted = await extract_and_score(market.description, scrape_result["text"], domain)
+        except Exception:
+            # A flaky/malformed LLM call fails just this candidate, not a batch.
+            return
+        if not extracted or not extracted.get("is_relevant"):
+            return
+
+        title = extracted["title"]
+        title_hash = simhash(title)
+
+        try:
+            embedding = await embed_text(extracted["summary"])
+        except Exception:
+            return
+
+        # --- critical section: dedup-check-and-insert, serialized per market ---
+        await session.execute(select(func.pg_advisory_xact_lock(_market_lock_key(market.id))))
+
+        stored = (
+            await session.execute(
+                select(NewsItem.canonical_url_hash, NewsItem.title_simhash).where(
+                    NewsItem.market_id == market.id
+                )
+            )
+        ).all()
+        if any(h == final_hash for h, _ in stored):
+            return  # exact URL already stored (also guarded by uq_news_market_url)
+        if any(
+            s is not None
+            and hamming_distance(title_hash, from_signed_64(s)) <= settings.simhash_hamming_threshold
+            for _, s in stored
+        ):
+            return  # near-duplicate title already stored for this market
+
+        similar = await find_similar(session, market.id, embedding, settings.vector_dedup_threshold)
+        if similar is not None:
+            return  # semantic duplicate of a news item already stored for this market
+
+        credibility = await compute_credibility(session, domain, extracted["credibility_signal"])
+        relevance = max(0.0, min(1.0, extracted["relevance_score"]))
+
+        try:
+            impact_hint = ImpactHint(extracted["impact_hint"])
+        except ValueError:
+            # LLM structured output is schema-constrained but not immune to
+            # returning an unexpected value under load — fail soft, not hard.
+            impact_hint = ImpactHint.ambiguous
+
+        item = NewsItem(
+            market_id=market.id,
+            url=scrape_result["final_url"],
+            canonical_url_hash=final_hash,
+            title_simhash=to_signed_64(title_hash),
+            title=title,
+            summary=extracted["summary"],
+            proofs=extracted.get("proofs", []),
+            source_domain=domain,
+            published_at=parse_published_at(candidate.get("published_at")),
+            credibility_score=credibility,
+            relevance_score=relevance,
+            impact_hint=impact_hint,
+            embedding=embedding,
+        )
+        session.add(item)
         await session.flush()
-        batch_id = uuid.uuid4()
+
         delivery_log = DeliveryLog(
-            market_id=market.id, batch_id=batch_id, news_item_ids=[str(i.id) for i in new_items]
+            market_id=market.id, batch_id=uuid.uuid4(), news_item_ids=[str(item.id)]
         )
         session.add(delivery_log)
-        await session.commit()
-        await session.refresh(delivery_log)
+        await session.commit()  # releases the advisory xact lock
         log_id = str(delivery_log.id)
 
     redis = ctx["redis"]
