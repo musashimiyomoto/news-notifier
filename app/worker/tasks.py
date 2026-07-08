@@ -1,3 +1,4 @@
+import random
 import uuid
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
@@ -18,6 +19,7 @@ from app.scraping.playwright_scraper import scrape_urls
 from app.search.aggregator import parse_published_at, search_all_sources, url_hash
 from app.security import decrypt_secret
 from app.worker.errors import serializable_job_errors
+from app.worker.job_ids import process_market_job_id
 
 
 def _domain_of(url: str) -> str:
@@ -40,20 +42,36 @@ _ADAPTIVE_TIERS = [
 ]
 
 
-def _next_poll_at(resolution_date: datetime | None, now: datetime, default_minutes: int) -> datetime:
+def _next_poll_at(
+    resolution_date: datetime | None,
+    now: datetime,
+    default_minutes: int,
+    jitter_fraction: float = 0.0,
+) -> datetime:
+    """`jitter_fraction` randomizes the chosen step by +/- that fraction (e.g. 0.15
+    = up to 15% earlier or later), so markets sharing a tier don't all wake up in
+    the same worker tick — see Settings.poll_jitter_fraction. Applied uniformly
+    across every branch (including the two fixed-cadence ones) rather than just
+    the tiered case, since a burst of same-second subscriptions with no
+    resolution_date would otherwise all collide on the default-interval branch."""
     if resolution_date is None:
-        return now + timedelta(minutes=default_minutes)
+        step = timedelta(minutes=default_minutes)
+    else:
+        remaining = resolution_date - now
+        if remaining <= timedelta(0):
+            # Past resolution_date but not yet marked resolved by the client —
+            # keep checking at the tightest cadence rather than silently going quiet.
+            step = timedelta(hours=1)
+        else:
+            step = timedelta(minutes=default_minutes)
+            for max_remaining, tier_step in _ADAPTIVE_TIERS:
+                if remaining <= max_remaining:
+                    step = tier_step
+                    break
 
-    remaining = resolution_date - now
-    if remaining <= timedelta(0):
-        # Past resolution_date but not yet marked resolved by the client — keep
-        # checking at the tightest cadence rather than silently going quiet.
-        return now + timedelta(hours=1)
-
-    for max_remaining, step in _ADAPTIVE_TIERS:
-        if remaining <= max_remaining:
-            return now + step
-    return now + timedelta(minutes=default_minutes)
+    if jitter_fraction:
+        step *= 1 + random.uniform(-jitter_fraction, jitter_fraction)
+    return now + step
 
 
 @serializable_job_errors
@@ -64,7 +82,13 @@ async def process_market(ctx: dict, market_id: str) -> None:
     serially in one job and blow past job_timeout on a market's first cycle
     (where every candidate is fresh). Keeping only the bounded query+search work
     here means this job stays fast, and each article is generated (and its webhook
-    fired) independently rather than waiting on the whole batch."""
+    fired) independently rather than waiting on the whole batch.
+
+    Self-schedules its own next run at the end (see the _defer_until enqueue
+    below) instead of relying solely on scheduler.enqueue_due_markets polling the
+    DB every tick. That crontick still exists as a safety net (catches a market
+    whose self-scheduled job was lost to a worker crash/Redis flush), but is no
+    longer the primary driver — see WorkerSettings.cron_jobs."""
     settings = get_settings()
 
     async with async_session_factory() as session:
@@ -86,11 +110,26 @@ async def process_market(ctx: dict, market_id: str) -> None:
 
         market.last_polled_at = datetime.now(timezone.utc)
         market.next_poll_at = _next_poll_at(
-            market.resolution_date, market.last_polled_at, market.poll_interval_minutes
+            market.resolution_date,
+            market.last_polled_at,
+            market.poll_interval_minutes,
+            settings.poll_jitter_fraction,
         )
+        next_poll_at = market.next_poll_at
         await session.commit()
 
     redis = ctx["redis"]
+    # _job_id includes next_poll_at (see process_market_job_id) so this doesn't
+    # collide with the still-in-flight current job's own job_id — arq holds a
+    # job_id's key until the enqueuing coroutine returns, and this call happens
+    # from inside that same coroutine, before it returns.
+    await redis.enqueue_job(
+        "process_market",
+        market_id,
+        _job_id=process_market_job_id(market_id, next_poll_at),
+        _defer_until=next_poll_at,
+    )
+
     for candidate in fresh_candidates:
         # _job_id dedups a re-enqueue of the same URL across overlapping cycles
         # (same idea as scheduler.enqueue_due_markets), so a candidate that's slow

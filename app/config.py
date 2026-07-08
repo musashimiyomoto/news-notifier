@@ -47,6 +47,12 @@ class Settings(BaseSettings):
 
     # Scheduling
     default_poll_interval_minutes: int = 24 * 60
+    # Randomizes each computed next_poll_at by +/- this fraction, so markets that
+    # happen to land on the same tier (e.g. a burst of subscriptions all polling
+    # hourly) don't all wake up in the same worker tick — see
+    # app.worker.tasks._next_poll_at. 0 disables jitter (deterministic timing,
+    # useful for tests). 0.1 = up to 10% earlier or later.
+    poll_jitter_fraction: float = 0.15
 
     # Dedup thresholds
     vector_dedup_threshold: float = 0.90

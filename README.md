@@ -11,7 +11,8 @@ seen for that market, and pushes new, deduplicated news as a signed webhook.
 ```
 POST /markets/subscribe ─▶ Postgres (markets)
                                │
-                     arq cron (every minute, checks next_poll_at)
+                  process_market self-schedules its own
+                  next run via arq _defer_until=next_poll_at
                                │
                       process_market job
                                │
@@ -36,6 +37,14 @@ delivery fails, **only** `deliver_batch` retries — re-running the whole
 pipeline on delivery failure would have the dedup logic silently swallow
 the retry (the news is already in the DB) and the webhook would never
 go out again.
+
+**Scheduling:** each `process_market` run re-enqueues its own next run at the
+end (`_defer_until=next_poll_at`, jittered by `POLL_JITTER_FRACTION` — default
+±15% — so markets sharing a cadence tier don't all wake up in the same worker
+tick). A low-frequency cron (`enqueue_due_markets`, every 10 minutes) is a
+safety net that re-enqueues any market whose `next_poll_at` is more than 5
+minutes overdue — i.e. one whose self-scheduled job was lost to a worker
+crash or Redis eviction — rather than the primary driver of cadence.
 
 ## Stack
 

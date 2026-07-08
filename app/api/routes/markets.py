@@ -14,6 +14,7 @@ from app.config import get_settings
 from app.db.models import Market, MarketStatus, NewsItem
 from app.db.session import get_session
 from app.security import encrypt_secret
+from app.worker.job_ids import process_market_job_id
 
 router = APIRouter(prefix="/markets", tags=["markets"])
 
@@ -90,12 +91,19 @@ async def subscribe(
     await session.commit()
     await session.refresh(market)
 
-    # Trigger a first run right away instead of waiting for the scheduler tick,
-    # so a fresh subscription gets a backfill batch on day one, not a day later.
-    # _job_id dedups against the scheduler cron picking up the same market
-    # (next_poll_at=now, above) before this run's commit advances it.
+    # Trigger a first run right away instead of waiting for the scheduler
+    # safety-net tick, so a fresh subscription gets a backfill batch on day one,
+    # not minutes later. process_market_job_id's timestamp component means this
+    # can't collide/dedup with a later safety-net sweep enqueue the way the old
+    # static job_id did — but that's fine: if both somehow fire, process_market
+    # is idempotent per candidate (see the existing_hashes check), so a rare
+    # double run just costs one extra query-gen+search pass, never duplicate
+    # webhooks.
     await request.app.state.redis.enqueue_job(
-        "process_market", str(market.id), _job_id=f"process_market:{market.id}"
+        "process_market",
+        str(market.id),
+        _job_id=process_market_job_id(str(market.id), now),
+        _defer_until=now,
     )
 
     return MarketResponse(
