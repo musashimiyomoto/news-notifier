@@ -1,4 +1,4 @@
-# murderer — reactive news agent for prediction markets
+# news-notifier — reactive news agent for prediction markets
 
 Subscribe a prediction market once (question + resolution criteria + a
 callback URL). The agent then, on its own schedule, searches the web,

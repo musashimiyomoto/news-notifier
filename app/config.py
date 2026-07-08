@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     # Database / queue
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/murderer"
+    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/news_notifier"
     redis_url: str = "redis://localhost:6379/0"
 
     # LLM (OpenRouter — https://openrouter.ai)

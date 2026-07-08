@@ -1286,7 +1286,7 @@ wheels = [
 ]
 
 [[package]]
-name = "murderer"
+name = "news-notifier"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

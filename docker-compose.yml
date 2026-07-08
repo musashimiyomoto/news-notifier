@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: murderer
+      POSTGRES_DB: news_notifier
     ports:
       - "5432:5432"
     volumes:
@@ -33,7 +33,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/murderer
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/news_notifier
       REDIS_URL: redis://redis:6379/0
     env_file: .env
     depends_on:
@@ -46,7 +46,7 @@ services:
     build: .
     command: ["worker"]
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/murderer
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/news_notifier
       REDIS_URL: redis://redis:6379/0
     env_file: .env
     depends_on:

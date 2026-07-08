@@ -1,5 +1,5 @@
 [project]
-name = "murderer"
+name = "news-notifier"
 version = "0.1.0"
 description = "Reactive news-monitoring agent for prediction markets"
 requires-python = ">=3.11"

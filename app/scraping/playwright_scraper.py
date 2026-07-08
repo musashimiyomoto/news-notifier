@@ -3,7 +3,7 @@ import asyncio
 import trafilatura
 from playwright.async_api import async_playwright
 
-USER_AGENT = "Mozilla/5.0 (compatible; MurdererNewsBot/1.0; +https://example.com/bot)"
+USER_AGENT = "Mozilla/5.0 (compatible; NewsNotifierBot/1.0; +https://example.com/bot)"
 
 
 async def scrape_urls(urls: list[str], timeout_ms: int, concurrency: int) -> dict[str, dict]:
