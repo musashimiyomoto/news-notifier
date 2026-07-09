@@ -33,6 +33,12 @@ class LLMClient:
             },
             "temperature": 0.1,
         }
+        if settings.llm_disable_thinking:
+            # Suppress the <think> block on reasoning models (e.g. the default
+            # local Qwen3-1.7B) — see Settings.llm_disable_thinking. Harmless to
+            # a non-thinking model whose template accepts it; disable the setting
+            # for backends whose chat template rejects the kwarg.
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
         headers = {}
         if settings.llm_api_key:
             headers["Authorization"] = f"Bearer {settings.llm_api_key}"

@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     # is the dominant CPU cost for llama.cpp, so this directly bounds latency.
     # The lead of a news article carries almost all the resolution-relevant signal.
     extraction_max_chars: int = 4000
+    # The default local model (Qwen3-1.7B, see docker-compose.yml) is a *reasoning*
+    # model: left alone it emits a long <think> block before the answer, ~2.5x the
+    # tokens for no quality gain on this extraction task. When true, the client
+    # passes chat_template_kwargs={"enable_thinking": false} to suppress it. Set
+    # false for a non-thinking model (e.g. the Qwen3-4B-Instruct alternative) or
+    # any backend whose chat template doesn't accept that kwarg (e.g. a cloud API).
+    llm_disable_thinking: bool = True
 
     # Embeddings — computed locally via FastEmbed (ONNX), no external API call.
     # Changing the model changes embedding_dim, which requires a new migration

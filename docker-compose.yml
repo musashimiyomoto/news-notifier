@@ -61,7 +61,7 @@ services:
         condition: service_started
       # worker is the only service that calls the LLM (see app/worker/tasks.py) —
       # wait for a real 200 from /health, not just "container started", since the
-      # first boot is downloading a ~2.5GB model (see the llm service above).
+      # first boot is downloading the model from Hugging Face (see llm service).
       llm:
         condition: service_healthy
 
@@ -80,26 +80,41 @@ services:
 
   # Local CPU inference for query-gen + extraction/scoring (see app/llm/client.py)
   # — replaces OpenRouter by default. -hf downloads the quant from Hugging Face
-  # on first boot (~2.5GB) into the llm_models volume, so restarts don't
-  # re-download. --parallel is the number of concurrent requests the server
-  # will actually run; WorkerSettings.max_jobs (app/worker/settings.py) is
-  # deliberately kept close to this number — queuing past it just adds latency,
-  # it doesn't add throughput. --ctx-size is the *total* KV budget across all
-  # parallel slots, not per-request (12288 / 3 = 4096 tokens/slot — enough for
-  # the system prompt + the 8000-char truncated article text + schema + reply).
+  # on first boot into the llm_models volume, so restarts don't re-download.
+  #
+  # Tuning is for a small CPU box (measured on 2 physical cores / ~5GB free RAM):
+  #  * Model: Qwen3-1.7B beats the older 4B here — ~18 tok/s vs ~8, ~2GB vs ~6GB
+  #    RAM — with valid schema output. IMPORTANT: it's a *reasoning* model, so
+  #    app/llm/client.py sends enable_thinking=false (Settings.llm_disable_thinking);
+  #    without that it burns ~2.5x the tokens "thinking" and is no faster overall.
+  #    To trade speed for stronger judgement, flip -hf back to the 4B line below
+  #    (a non-thinking Instruct model — set LLM_DISABLE_THINKING=false for it).
+  #  * --parallel 1 / --threads 2: measured on this box, one extraction runs at
+  #    ~15.6 tok/s alone but drops to ~5-7 tok/s each when two run concurrently —
+  #    on 2 physical cores batching gives no aggregate gain, it just halves
+  #    per-request speed and doubles KV-cache RAM. So serialize LLM calls (one
+  #    slot) and let each finish at full speed; WorkerSettings.max_jobs=2 still
+  #    overlaps the next candidate's scrape/embed with the current extraction.
+  #    --threads matches *physical* cores (hyperthreads add contention, not speed).
+  #  * --ctx-size 4096: single slot; plenty for system prompt + truncated article
+  #    (EXTRACTION_MAX_CHARS=4000 ≈ 1.5k tokens) + schema + reply.
   llm:
     image: ghcr.io/ggml-org/llama.cpp:server
     command:
       - -hf
-      - bartowski/Qwen_Qwen3-4B-Instruct-2507-GGUF:Q4_K_M
+      - bartowski/Qwen_Qwen3-1.7B-GGUF:Q4_K_M
+      # Stronger but slower alternative (set LLM_DISABLE_THINKING=false in .env):
+      # - bartowski/Qwen_Qwen3-4B-Instruct-2507-GGUF:Q4_K_M
       - --host
       - "0.0.0.0"
       - --port
       - "8080"
       - --parallel
-      - "3"
+      - "1"
+      - --threads
+      - "2"
       - --ctx-size
-      - "12288"
+      - "4096"
       - --jinja
     environment:
       HF_HOME: /models

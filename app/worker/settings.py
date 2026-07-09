@@ -54,8 +54,9 @@ class WorkerSettings:
     # one call per job. On CPU, llama.cpp's *total* token throughput is fixed, so
     # running more extractions concurrently than it has slots doesn't add
     # throughput — it just splits that fixed budget, making each request slower
-    # and far more likely to hit its timeout. We deliberately keep concurrency at
-    # or below the `llm` service's --parallel (docker-compose.yml, currently 3)
-    # so each extraction finishes as fast as the hardware allows. The semantic
-    # pre-filter (see process_market) is what actually cuts total LLM volume.
-    max_jobs = 3
+    # and far more likely to hit its timeout. The `llm` service runs a single slot
+    # (--parallel 1, docker-compose.yml); we keep this at 2 so exactly one
+    # candidate holds the LLM while a second overlaps its scrape/embed, without a
+    # pile of jobs blocking on the one slot. The semantic pre-filter (see
+    # process_market) is what actually cuts total LLM volume.
+    max_jobs = 2
