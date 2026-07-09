@@ -3,7 +3,16 @@ import asyncio
 import trafilatura
 from playwright.async_api import async_playwright
 
-USER_AGENT = "Mozilla/5.0 (compatible; NewsNotifierBot/1.0; +https://example.com/bot)"
+# A real Chrome UA, not a self-identifying bot string. Many news sites gate or
+# degrade content for obvious bots (the old NewsNotifierBot/1.0 UA measurably cut
+# extraction — e.g. a control page yielded ~2x more text under a real UA), and
+# trafilatura needs the full article markup to extract anything. This does mean
+# we no longer announce ourselves as a bot; sites that hard-block headless
+# browsers (e.g. MSN's JS-heavy SPA) still fail and fall through to scrape_failed.
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
 
 
 async def scrape_urls(urls: list[str], timeout_ms: int, concurrency: int) -> dict[str, dict]:
