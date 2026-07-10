@@ -7,7 +7,7 @@ from urllib.parse import urlsplit
 from sqlalchemy import func, select
 
 from app.config import get_settings
-from app.db.models import DeliveryLog, DeliveryStatus, ImpactHint, Market, MarketStatus, NewsItem
+from app.db.models import DeliveryLog, DeliveryStatus, ImpactHint, Market, MarketStatus, NewsItem, ScrapeFailure
 from app.db.session import async_session_factory
 from app.dedup.simhash import from_signed_64, hamming_distance, simhash, to_signed_64
 from app.dedup.vector_dedup import find_similar
@@ -207,6 +207,20 @@ async def process_candidate(ctx: dict, market_id: str, candidate: dict) -> None:
         scrape_result = scraped.get(candidate["url"])
         if not scrape_result or not scrape_result["success"]:
             logger.info("process_candidate drop reason=scrape_failed url=%s", candidate["url"])
+            # final_url (when available) reflects the post-redirect real domain;
+            # falls back to the pre-scrape candidate URL (e.g. a Google News
+            # redirect) when navigation failed outright and never resolved one.
+            failure_domain = _domain_of((scrape_result or {}).get("final_url") or candidate["url"])
+            session.add(
+                ScrapeFailure(
+                    market_id=market.id,
+                    url=candidate["url"],
+                    source_domain=failure_domain,
+                    reason="scrape_failed",
+                    detail=(scrape_result or {}).get("error"),
+                )
+            )
+            await session.commit()
             return
 
         # Hash/domain must come from the post-redirect final_url, not the

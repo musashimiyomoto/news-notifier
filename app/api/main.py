@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 
 from app.api.routes.markets import router as markets_router
+from app.api.routes.scrape_failures import router as scrape_failures_router
 from app.config import get_settings
 
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -29,6 +30,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.include_router(markets_router)
+app.include_router(scrape_failures_router)
 
 
 @app.get("/health")
