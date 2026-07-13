@@ -106,9 +106,18 @@ can leave the `llm` container stopped since nothing else depends on it.
 
 ## API
 
+Every `/markets/*` and `/scrape-failures` request requires
+`Authorization: Bearer <API_KEY>` once `API_KEY` is set in `.env` (see
+`.env.example`) — subscribe triggers a recurring search+scrape+LLM pipeline
+per market, and PATCH can rewrite an existing market's `callback_url`, so an
+open endpoint on anything reachable outside your network is a resource-
+exhaustion / webhook-hijack risk. `API_KEY` unset disables the check, for
+local dev and the `/demo` page only.
+
 ```bash
 curl -X POST localhost:8000/markets/subscribe \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_KEY" \
   -d '{
     "market_id": "will-fed-cut-rates-sep-2026",
     "market_description": "Resolves YES if the Federal Reserve cuts the federal funds rate at its September 2026 FOMC meeting.",

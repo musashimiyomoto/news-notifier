@@ -59,6 +59,7 @@
 <script>
 let pollTimer = null;
 const seenIds = new Set();
+const itemElements = new Map(); // id -> DOM element, so re-renders move nodes instead of recreating them
 
 function randomSecret() {
   return crypto.randomUUID().replace(/-/g, '');
@@ -132,29 +133,38 @@ function startPolling(marketId) {
 function renderNewItems(items) {
   const feed = document.getElementById('feed');
   const watchingText = document.getElementById('watching-text');
-  const fresh = items.filter(item => !seenIds.has(item.id));
-  fresh.forEach(item => seenIds.add(item.id));
+  items.forEach(item => seenIds.add(item.id));
 
   watchingText.textContent = seenIds.size > 0
     ? `Watching for news… ${seenIds.size} item${seenIds.size === 1 ? '' : 's'} found so far`
     : 'Watching for news… none yet';
 
-  fresh.forEach(item => {
-    const el = document.createElement('div');
-    el.className = 'item';
-    const published = item.published_at ? new Date(item.published_at).toLocaleString() : 'unknown date';
-    el.innerHTML = `
-      <h3><a href="${item.url}" target="_blank" rel="noopener">${escapeHtml(item.title)}</a></h3>
-      <p>${escapeHtml(item.summary)}</p>
-      <div class="meta">
-        <span class="badge">${escapeHtml(item.source_domain)}</span>
-        <span class="badge">${published}</span>
-        <span class="badge">credibility ${item.credibility_score.toFixed(2)}</span>
-        <span class="badge">relevance ${item.relevance_score.toFixed(2)}</span>
-        <span class="badge">${escapeHtml(item.impact_hint)}</span>
-      </div>
-    `;
-    feed.prepend(el);
+  // The server already returns items sorted by publish date (newest first,
+  // undated ones last) — render in that exact order instead of prepending
+  // each poll's fresh arrivals, which used to reshuffle the feed based on
+  // processing order rather than the article's actual date. appendChild on
+  // an already-rendered element moves it without recreating it, so existing
+  // items don't re-flash; only genuinely new items get built and fade in.
+  items.forEach(item => {
+    let el = itemElements.get(item.id);
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'item';
+      const published = item.published_at ? new Date(item.published_at).toLocaleString() : 'unknown date';
+      el.innerHTML = `
+        <h3><a href="${item.url}" target="_blank" rel="noopener">${escapeHtml(item.title)}</a></h3>
+        <p>${escapeHtml(item.summary)}</p>
+        <div class="meta">
+          <span class="badge">${escapeHtml(item.source_domain)}</span>
+          <span class="badge">${published}</span>
+          <span class="badge">credibility ${item.credibility_score.toFixed(2)}</span>
+          <span class="badge">relevance ${item.relevance_score.toFixed(2)}</span>
+          <span class="badge">${escapeHtml(item.impact_hint)}</span>
+        </div>
+      `;
+      itemElements.set(item.id, el);
+    }
+    feed.appendChild(el);
   });
 }
 

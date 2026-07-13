@@ -32,6 +32,7 @@ client" marker, not authentication. This means:
 """
 
 import asyncio
+import json
 import re
 import time
 
@@ -146,8 +147,18 @@ class MsnExtractor:
             return None
 
         body_html = data.get("body") or ""
-        text = trafilatura.extract(body_html, include_comments=False, favor_recall=True) if body_html else None
+        if not body_html:
+            return None
+        extracted_json = trafilatura.extract(
+            body_html,
+            include_comments=False,
+            favor_recall=True,
+            output_format="json",
+            with_metadata=True,
+        )
+        doc = json.loads(extracted_json) if extracted_json else {}
+        text = doc.get("text")
         if not text:
             return None
 
-        return {"final_url": url, "text": text, "success": True}
+        return {"final_url": url, "text": text, "success": True, "published_at": doc.get("date")}

@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import httpx
 import trafilatura
@@ -27,6 +28,10 @@ async def scrape_urls(urls: list[str], timeout_ms: int, concurrency: int) -> dic
         important for Google News RSS links, which are redirects, not real URLs)
       - text: extracted main content (trafilatura), empty string on failure
       - success: bool
+      - published_at: publish date pulled from the page's own metadata
+        (trafilatura/htmldate reading <meta>/JSON-LD/etc.), or None if the page
+        doesn't carry one. Backfills candidates whose search-source metadata
+        lacked a usable date.
     """
     results: dict[str, dict] = {}
     if not urls:
@@ -57,11 +62,19 @@ async def scrape_urls(urls: list[str], timeout_ms: int, concurrency: int) -> dic
                     pass
                 final_url = page.url
                 html = await page.content()
-                extracted = trafilatura.extract(html, include_comments=False, favor_recall=True)
+                extracted_json = trafilatura.extract(
+                    html,
+                    include_comments=False,
+                    favor_recall=True,
+                    output_format="json",
+                    with_metadata=True,
+                )
+                doc = json.loads(extracted_json) if extracted_json else {}
                 results[url] = {
                     "final_url": final_url,
-                    "text": extracted or "",
-                    "success": bool(extracted),
+                    "text": doc.get("text") or "",
+                    "success": bool(doc.get("text")),
+                    "published_at": doc.get("date"),
                 }
             except Exception as exc:  # noqa: BLE001 — any single-page failure must not abort the batch
                 results[url] = {"final_url": url, "text": "", "success": False, "error": str(exc)}

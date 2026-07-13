@@ -45,3 +45,10 @@ class NewsItemResponse(BaseModel):
     relevance_score: float
     impact_hint: str
     proofs: list[dict]
+
+
+class DomainFailureResponse(BaseModel):
+    domain: str
+    failure_count: int
+    last_occurred_at: datetime
+    sample_urls: list[str]

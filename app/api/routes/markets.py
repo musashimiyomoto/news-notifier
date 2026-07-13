@@ -13,11 +13,11 @@ from app.api.schemas import (
 from app.config import get_settings
 from app.db.models import Market, MarketStatus, NewsItem
 from app.db.session import get_session
-from app.security import encrypt_secret
+from app.security import encrypt_secret, require_api_key
 from app.worker.abort import abort_market_jobs
 from app.worker.job_ids import process_market_job_id
 
-router = APIRouter(prefix="/markets", tags=["markets"])
+router = APIRouter(prefix="/markets", tags=["markets"], dependencies=[Depends(require_api_key)])
 
 
 @router.get("/{market_id}", response_model=MarketResponse)
@@ -49,7 +49,7 @@ async def list_market_news(
     result = await session.execute(
         select(NewsItem)
         .where(NewsItem.market_id == market.id)
-        .order_by(NewsItem.discovered_at.desc())
+        .order_by(NewsItem.published_at.desc().nulls_last(), NewsItem.discovered_at.desc())
     )
     news_items = result.scalars().all()
 

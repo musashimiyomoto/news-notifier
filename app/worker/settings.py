@@ -4,7 +4,7 @@ from arq import cron
 from arq.connections import RedisSettings
 
 from app.config import get_settings
-from app.worker.scheduler import enqueue_due_markets, enqueue_stuck_deliveries
+from app.worker.scheduler import enqueue_due_markets, enqueue_stuck_batches, enqueue_stuck_deliveries
 from app.worker.tasks import deliver_batch, process_candidate, process_market
 
 _settings = get_settings()
@@ -40,9 +40,12 @@ class WorkerSettings:
     # to run often enough to catch a lost job within OVERDUE_THRESHOLD, not every
     # minute. enqueue_stuck_deliveries stays on its original cadence — it's still
     # the primary recovery path for stuck deliveries, not a backstop for one.
+    # enqueue_stuck_batches runs the same cadence — STUCK_BATCH_THRESHOLD (not
+    # the cron interval) is what bounds how long a batch can sit open.
     cron_jobs = [
         cron(enqueue_due_markets, minute={0, 10, 20, 30, 40, 50}),
         cron(enqueue_stuck_deliveries, minute=set(range(60))),
+        cron(enqueue_stuck_batches, minute=set(range(60))),
     ]
     max_tries = 6
     # process_candidate does one scrape + one (slow, local-CPU) LLM extraction +

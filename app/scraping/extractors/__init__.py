@@ -10,10 +10,12 @@ article text. This package holds one extractor per such site.
 
 Contract (see DomainExtractor): an extractor declares which URLs it `matches`,
 and `extract` returns a scrape-result dict identical in shape to what
-playwright_scraper produces — {"final_url", "text", "success"} — or None to
-signal "not me / couldn't do it, fall through to the generic scraper". Extractors
-must never raise for an expected miss; scrape_urls treats None (or a swallowed
-error) as "fall through", so one flaky site can't break the batch.
+playwright_scraper produces — {"final_url", "text", "success"}, plus an optional
+"published_at" (an ISO date/datetime string pulled from the page's own metadata,
+omitted or None if not found) — or None to signal "not me / couldn't do it, fall
+through to the generic scraper". Extractors must never raise for an expected
+miss; scrape_urls treats None (or a swallowed error) as "fall through", so one
+flaky site can't break the batch.
 
 Register a new site by appending its extractor to EXTRACTORS below.
 """

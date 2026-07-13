@@ -54,6 +54,11 @@ class DeliveryStatus(str, enum.Enum):
     dead_letter = "dead_letter"
 
 
+class BatchStatus(str, enum.Enum):
+    open = "open"
+    closed = "closed"
+
+
 class Market(Base):
     __tablename__ = "markets"
 
@@ -69,6 +74,13 @@ class Market(Base):
     poll_interval_minutes: Mapped[int] = mapped_column(Integer, default=24 * 60)
     next_poll_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     last_polled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # High-water mark: the latest published_at ever included in a successfully
+    # delivered webhook for this market. process_market filters candidates
+    # older than this out of every subsequent cycle, so a late-indexed article
+    # (search sources surface it days after publication) can't land in a batch
+    # sent after a batch with newer articles already went out — see
+    # app.worker.tasks._filter_older_than_watermark.
+    max_delivered_published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -78,12 +90,32 @@ class Market(Base):
     news_items: Mapped[list["NewsItem"]] = relationship(back_populates="market", cascade="all, delete-orphan")
 
 
+class NewsBatch(Base):
+    """One row per process_market fan-out cycle that produced >=1 candidate.
+    resolved_count/expected_count + status=open->closed is the single gate that
+    decides who gets to build this batch's DeliveryLog — see
+    app.worker.batching.resolve_batch_candidate / force_close_batch."""
+
+    __tablename__ = "news_batches"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    market_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("markets.id", ondelete="CASCADE"), index=True)
+    expected_count: Mapped[int] = mapped_column(Integer)
+    resolved_count: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[BatchStatus] = mapped_column(Enum(BatchStatus, name="batch_status"), default=BatchStatus.open)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class NewsItem(Base):
     __tablename__ = "news_items"
     __table_args__ = (UniqueConstraint("market_id", "canonical_url_hash", name="uq_news_market_url"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     market_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("markets.id", ondelete="CASCADE"), index=True)
+    batch_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("news_batches.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     url: Mapped[str] = mapped_column(Text)
     canonical_url_hash: Mapped[str] = mapped_column(String(64), index=True)
@@ -111,6 +143,27 @@ class NewsItem(Base):
     market: Mapped["Market"] = relationship(back_populates="news_items")
 
 
+class NewsBatchCandidate(Base):
+    """One row per (batch, candidate) resolution — the idempotency guard AND
+    the thing that makes 'is this batch done' knowable at all, since most drop
+    reasons (not_relevant, dup_*, scrape_failed, ...) never produce a NewsItem.
+    outcome is a plain string, not an Enum, matching ScrapeFailure.reason so a
+    new drop reason doesn't need a migration."""
+
+    __tablename__ = "news_batch_candidates"
+    __table_args__ = (UniqueConstraint("batch_id", "canonical_url_hash", name="uq_batch_candidate"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    batch_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("news_batches.id", ondelete="CASCADE"), index=True)
+    canonical_url_hash: Mapped[str] = mapped_column(String(64))
+    outcome: Mapped[str] = mapped_column(String(50))
+    news_item_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("news_items.id", ondelete="SET NULL"), nullable=True
+    )
+
+    resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class Source(Base):
     __tablename__ = "sources"
 
@@ -123,6 +176,20 @@ class Source(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class ScrapeFailure(Base):
+    __tablename__ = "scrape_failures"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    market_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("markets.id", ondelete="CASCADE"), index=True)
+
+    url: Mapped[str] = mapped_column(Text)
+    source_domain: Mapped[str] = mapped_column(String(255), index=True)
+    reason: Mapped[str] = mapped_column(String(50))
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class DeliveryLog(Base):

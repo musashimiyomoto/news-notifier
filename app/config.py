@@ -56,6 +56,13 @@ class Settings(BaseSettings):
     # for staging/prod (see the validator below for the command).
     secret_encryption_key: str = "oMzYJ7UzyUqHOowktrH_dHkBBwMbW9QS_QGcoJMeHbU="
 
+    # API key required on every /markets/* and /scrape-failures request (see
+    # app.security.require_api_key). subscribe/patch/delete aren't just reads —
+    # subscribe kicks off a recurring search+scrape+LLM pipeline, and patch can
+    # hijack an existing market's callback_url/secret — so this can't be left
+    # open on a public deployment. None disables the check (local dev only).
+    api_key: str | None = None
+
     @field_validator("secret_encryption_key")
     @classmethod
     def _validate_fernet_key(cls, value: str) -> str:

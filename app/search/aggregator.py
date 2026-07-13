@@ -28,9 +28,14 @@ def parse_published_at(value: object) -> datetime | None:
         except (TypeError, ValueError):
             pass
         try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             return None
+        # date-only ISO strings (e.g. "2026-07-01", as produced by trafilatura's
+        # metadata extraction) parse to a naive datetime — coerce to UTC like the
+        # datetime-instance branch above, so every stored published_at is
+        # consistently timezone-aware.
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
     return None
 
 
