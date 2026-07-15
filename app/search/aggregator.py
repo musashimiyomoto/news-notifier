@@ -42,7 +42,13 @@ def parse_published_at(value: object) -> datetime | None:
 def normalize_url(url: str) -> str:
     parts = urlsplit(url)
     query = sorted((k, v) for k, v in parse_qsl(parts.query) if k.lower() not in TRACKING_PARAMS)
-    normalized = parts._replace(query=urlencode(query), fragment="")
+    # Scheme and host are case-insensitive per RFC 3986 — lowercase them so
+    # "https://Example.com/x" and "https://example.com/x" hash identically
+    # (sources disagree on casing for the same article). Path/query casing is
+    # significant and left untouched.
+    normalized = parts._replace(
+        scheme=parts.scheme.lower(), netloc=parts.netloc.lower(), query=urlencode(query), fragment=""
+    )
     return urlunsplit(normalized).rstrip("/")
 
 

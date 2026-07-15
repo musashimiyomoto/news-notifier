@@ -19,7 +19,12 @@ class LLMClient:
     works unmodified against OpenRouter or any other OpenAI-compatible
     provider too, since it's just an HTTP client with a configurable base_url."""
 
-    async def generate_json(self, model: str, system: str, prompt: str, schema: dict, name: str) -> dict:
+    async def generate_json(
+        self, model: str, system: str, prompt: str, schema: dict, name: str, temperature: float = 0.1
+    ) -> dict:
+        """`temperature` defaults low for deterministic judgement tasks
+        (extraction/scoring); query generation passes a higher value for
+        lexical variety across queries — see app.llm.query_gen."""
         settings = get_settings()
         payload = {
             "model": model,
@@ -31,7 +36,7 @@ class LLMClient:
                 "type": "json_schema",
                 "json_schema": {"name": name, "strict": True, "schema": schema},
             },
-            "temperature": 0.1,
+            "temperature": temperature,
         }
         if settings.llm_disable_thinking:
             # Suppress the <think> block on reasoning models (e.g. the default

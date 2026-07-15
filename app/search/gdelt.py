@@ -25,6 +25,12 @@ async def search_gdelt(query: str, max_records: int = 20) -> list[dict]:
         "maxrecords": str(max_records),
         "format": "json",
         "sort": "hybridrel",
+        # Bound results to the last month. Without a timespan GDELT searches its
+        # full 3-month window, so with hybridrel sorting a chunk of maxrecords is
+        # routinely spent on months-old coverage that the worker's recency filter
+        # (Settings.candidate_max_age_days, default 30d) then throws away —
+        # wasted slots that fresher articles could have filled.
+        "timespan": "1m",
     }
     try:
         async with httpx.AsyncClient(timeout=15) as client:

@@ -81,6 +81,13 @@ so nothing will hit it before it's actually ready.
 
 To re-run migrations/seed after a schema change: `docker compose run --rm migrate`.
 
+## Setup (Windows, no Docker, NVIDIA GPU)
+
+See [`windows/README.md`](windows/README.md) — native Postgres/Memurai/llama.cpp
+(CUDA) plus PowerShell scripts (`windows/*.ps1`) with switchable LLM model
+presets. No code changes; the GPU serves the same OpenAI-compatible endpoint
+the worker already talks to.
+
 ## Setup (without Docker for api/worker — faster local iteration)
 
 ```bash
