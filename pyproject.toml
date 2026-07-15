@@ -35,3 +35,8 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["app*"]
+
+[tool.pytest.ini_options]
+# auto mode runs bare `async def test_*` functions without requiring the
+# @pytest.mark.asyncio marker on each; existing marked tests are unaffected.
+asyncio_mode = "auto"

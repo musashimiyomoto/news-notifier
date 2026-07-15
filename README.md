@@ -1,5 +1,7 @@
 # news-notifier — reactive news agent for prediction markets
 
+[![CI](https://github.com/musashimiyomoto/news-notifier/actions/workflows/ci.yml/badge.svg)](https://github.com/musashimiyomoto/news-notifier/actions/workflows/ci.yml)
+
 Subscribe a prediction market once (question + resolution criteria + a
 callback URL). The agent then, on its own schedule, searches the web,
 scrapes candidate articles, scores each for relevance/credibility against
@@ -166,8 +168,12 @@ updates description/resolution_date/callback/status.
 pytest
 ```
 
-Only covers pure logic (dedup, adaptive scheduling) — no live DB/LLM/
-network calls, so it runs without any of the infra above.
+Covers pure logic and mocked I/O boundaries — dedup, adaptive scheduling,
+search-source merging, credibility scoring, proof verification, webhook
+signing/delivery and the LLM client (both via `httpx.MockTransport`), and
+market PATCH side effects — with no live DB/LLM/network calls, so it runs
+without any of the infra above. CI (`.github/workflows/ci.yml`) runs the
+suite on Python 3.11 and 3.12 for every push and pull request.
 
 ## Known MVP scope cuts (intentional, not oversights)
 
