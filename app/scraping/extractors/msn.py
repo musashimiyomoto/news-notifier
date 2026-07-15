@@ -61,7 +61,11 @@ _APIKEY_RE = re.compile(r"[?&]apikey=([A-Za-z0-9]{20,})")
 # rejected key triggers exactly one browser sniff, not one per url.
 _cached_key: str = _KEY_SEED
 _key_lock = asyncio.Lock()
-_last_refresh_monotonic: float = 0.0
+# None = never refreshed. NOT 0.0: time.monotonic() counts from an arbitrary
+# reference (boot time on Linux/Windows), so on a freshly booted machine —
+# uptime under the cooldown, e.g. a CI runner — `monotonic() - 0.0 < cooldown`
+# would silently veto the very first refresh.
+_last_refresh_monotonic: float | None = None
 # Don't re-sniff more than this often — bounds cost if MSN is simply down.
 _REFRESH_COOLDOWN_SECONDS = 300.0
 
@@ -102,7 +106,10 @@ async def _refresh_key() -> str | None:
     global _cached_key, _last_refresh_monotonic
     async with _key_lock:
         # Another coroutine may have refreshed while we waited on the lock.
-        if time.monotonic() - _last_refresh_monotonic < _REFRESH_COOLDOWN_SECONDS:
+        if (
+            _last_refresh_monotonic is not None
+            and time.monotonic() - _last_refresh_monotonic < _REFRESH_COOLDOWN_SECONDS
+        ):
             return None
         _last_refresh_monotonic = time.monotonic()
         new_key = await _sniff_key_via_browser()

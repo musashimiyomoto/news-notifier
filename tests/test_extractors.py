@@ -1,4 +1,5 @@
 import asyncio
+import time
 
 import httpx
 
@@ -87,9 +88,11 @@ def _extract_with_sniff(handler, sniff_result, *, cooldown_ok=True):
         calls["sniff"] += 1
         return sniff_result
 
-    # Reset shared cache/cooldown, seed a known-bad current key.
+    # Reset shared cache/cooldown, seed a known-bad current key. None means
+    # "never refreshed" — 0.0 would silently arm the cooldown on any machine
+    # whose monotonic clock (uptime) is still below the cooldown window.
     msn_mod._cached_key = "STALE_KEY"
-    msn_mod._last_refresh_monotonic = 0.0 if cooldown_ok else 10**9
+    msn_mod._last_refresh_monotonic = None if cooldown_ok else time.monotonic()
     original = msn_mod._sniff_key_via_browser
     msn_mod._sniff_key_via_browser = fake_sniff
     try:
@@ -97,7 +100,7 @@ def _extract_with_sniff(handler, sniff_result, *, cooldown_ok=True):
     finally:
         msn_mod._sniff_key_via_browser = original
         msn_mod._cached_key = msn_mod._KEY_SEED
-        msn_mod._last_refresh_monotonic = 0.0
+        msn_mod._last_refresh_monotonic = None
     return result, calls["sniff"]
 
 
