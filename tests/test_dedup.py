@@ -1,5 +1,5 @@
 from app.dedup.simhash import from_signed_64, hamming_distance, simhash, to_signed_64
-from app.search.aggregator import normalize_url, url_hash
+from app.search.aggregator import normalize_url, parse_published_at, url_hash
 
 
 def test_signed_64_round_trip_preserves_simhash():
@@ -47,6 +47,30 @@ def test_simhash_unrelated_titles_are_far():
     a = simhash("Fed raises interest rates by 25 basis points")
     b = simhash("Local team wins championship game tonight")
     assert hamming_distance(a, b) > 3
+
+
+def test_parse_published_at_rfc822_without_zone_is_coerced_to_utc():
+    # Regression: an RFC822 date with no zone parses to a naive datetime, and
+    # the recency/watermark filters then compare it against an aware cutoff —
+    # which raises TypeError and fails the whole process_market cycle.
+    parsed = parse_published_at("Mon, 14 Jul 2026 10:00:00")
+    assert parsed is not None and parsed.tzinfo is not None
+
+
+def test_parse_published_at_all_branches_return_aware_or_none():
+    from datetime import datetime
+
+    cases = [
+        "Mon, 14 Jul 2026 10:00:00 GMT",  # RFC822 with zone
+        "2026-07-14T10:00:00Z",           # ISO with Z
+        "2026-07-01",                      # date-only ISO (naive -> coerced)
+        datetime(2026, 7, 1),              # naive datetime instance
+    ]
+    for value in cases:
+        parsed = parse_published_at(value)
+        assert parsed is not None and parsed.tzinfo is not None, value
+    assert parse_published_at("garbage") is None
+    assert parse_published_at(None) is None
 
 
 def test_normalize_url_strips_tracking_params_and_fragment():

@@ -147,6 +147,8 @@ async def update_market(
     if market is None:
         raise HTTPException(404, "Market not found")
 
+    was_active = market.status == MarketStatus.active
+
     if body.market_description is not None:
         market.description = body.market_description
     if body.resolution_date is not None:
@@ -164,6 +166,21 @@ async def update_market(
     # cancel its in-flight/queued jobs too (no-op abort set when already active).
     if body.status is not None and market.status != MarketStatus.active:
         await abort_market_jobs(request.app.state.redis, str(market.id))
+    elif not was_active and market.status == MarketStatus.active:
+        # Reactivation: the market's self-scheduling chain was broken while it
+        # sat paused (the deferred process_market job no-oped on the paused
+        # guard), so without this it would only wake when the
+        # enqueue_due_markets safety net notices the stale next_poll_at — up to
+        # ~15 minutes later. Kick a run now, same shape as subscribe's
+        # first-run trigger; a rare overlap with the safety net is harmless
+        # (process_market is idempotent per candidate).
+        now = datetime.now(timezone.utc)
+        await request.app.state.redis.enqueue_job(
+            "process_market",
+            str(market.id),
+            _job_id=process_market_job_id(str(market.id), now),
+            _defer_until=now,
+        )
     return MarketResponse(
         market_id=market.external_market_id,
         status=market.status.value,

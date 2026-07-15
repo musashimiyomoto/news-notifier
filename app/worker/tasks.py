@@ -283,8 +283,16 @@ async def process_candidate(ctx: dict, market_id: str, candidate: dict, batch_id
             await resolve(session, "market_inactive")
             return
 
+        # Reuse the worker's long-lived browser (see app.worker.settings._startup)
+        # instead of paying a full Chromium launch per candidate. If it died
+        # (crash/OOM), fall back to an ephemeral launch for this job rather than
+        # failing it — no relaunch here to avoid concurrent-relaunch races.
+        browser = ctx.get("browser")
+        if browser is not None and not browser.is_connected():
+            logger.warning("process_candidate shared browser disconnected; using ephemeral launch")
+            browser = None
         scraped = await scrape_urls(
-            [candidate["url"]], settings.playwright_timeout_ms, settings.scrape_concurrency
+            [candidate["url"]], settings.playwright_timeout_ms, settings.scrape_concurrency, browser=browser
         )
         scrape_result = scraped.get(candidate["url"])
         if not scrape_result or not scrape_result["success"]:
@@ -457,11 +465,16 @@ async def deliver_batch(ctx: dict, delivery_log_id: str) -> None:
             logger.info("deliver_batch skip reason=market_inactive delivery_log=%s", delivery_log_id)
             return
 
-        items = [
-            await session.get(NewsItem, uuid.UUID(item_id))
-            for item_id in log.news_item_ids
-        ]
-        items = [i for i in items if i is not None]
+        # One IN query instead of a round trip per item; news_item_ids already
+        # carries the delivery order (sorted at finalize time — see
+        # app.worker.batching._finalize_batch_delivery), so reassemble in that
+        # order rather than whatever the DB returns.
+        item_ids = [uuid.UUID(item_id) for item_id in log.news_item_ids]
+        fetched = (
+            await session.execute(select(NewsItem).where(NewsItem.id.in_(item_ids)))
+        ).scalars().all()
+        by_id = {item.id: item for item in fetched}
+        items = [by_id[item_id] for item_id in item_ids if item_id in by_id]
 
         payload = {
             "market_id": market.external_market_id,

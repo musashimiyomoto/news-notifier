@@ -2,12 +2,39 @@ import logging
 
 from arq import cron
 from arq.connections import RedisSettings
+from playwright.async_api import async_playwright
 
 from app.config import get_settings
 from app.worker.scheduler import enqueue_due_markets, enqueue_stuck_batches, enqueue_stuck_deliveries
 from app.worker.tasks import deliver_batch, process_candidate, process_market
 
 _settings = get_settings()
+
+
+async def _startup(ctx: dict) -> None:
+    await _configure_logging(ctx)
+    # One long-lived Chromium shared by every process_candidate job in this
+    # worker process. Each job scrapes exactly one URL (see the fan-out in
+    # process_market), so launching a fresh browser per job paid a seconds-long
+    # startup + RAM spike per candidate — pure overhead once the batch-oriented
+    # scrape loop stopped being the call shape. Jobs still get an isolated
+    # incognito context per URL inside scrape_urls. If this instance crashes
+    # mid-life, process_candidate detects the dead connection and falls back to
+    # an ephemeral per-job launch; a worker restart restores the shared one.
+    ctx["playwright"] = await async_playwright().start()
+    ctx["browser"] = await ctx["playwright"].chromium.launch(headless=True)
+
+
+async def _shutdown(ctx: dict) -> None:
+    browser = ctx.get("browser")
+    if browser is not None:
+        try:
+            await browser.close()
+        except Exception:  # noqa: BLE001 — already-dead browser must not fail shutdown
+            pass
+    playwright = ctx.get("playwright")
+    if playwright is not None:
+        await playwright.stop()
 
 
 async def _configure_logging(ctx: dict) -> None:
@@ -29,7 +56,8 @@ class WorkerSettings:
     """arq worker entrypoint: `arq app.worker.settings.WorkerSettings`"""
 
     redis_settings = RedisSettings.from_dsn(_settings.redis_url)
-    on_startup = _configure_logging
+    on_startup = _startup
+    on_shutdown = _shutdown
     functions = [process_market, process_candidate, deliver_batch]
     # Lets unsubscribe actively cancel a market's in-flight/queued jobs instead
     # of waiting for each to dequeue and no-op on the paused-status guard — see

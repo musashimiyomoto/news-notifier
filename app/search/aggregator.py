@@ -24,9 +24,14 @@ def parse_published_at(value: object) -> datetime | None:
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
     if isinstance(value, str):
         try:
-            return parsedate_to_datetime(value)
+            parsed = parsedate_to_datetime(value)
         except (TypeError, ValueError):
             pass
+        else:
+            # RFC822 dates without a zone parse to a naive datetime — coerce to
+            # UTC like every other branch, otherwise the recency filters'
+            # aware-vs-naive comparison raises and fails the whole cycle.
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
         try:
             parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:

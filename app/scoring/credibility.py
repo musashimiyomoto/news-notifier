@@ -17,8 +17,28 @@ SOURCE_WEIGHT = 0.6
 LLM_SIGNAL_WEIGHT = 0.4
 
 
+def _domain_candidates(domain: str) -> list[str]:
+    """Exact domain first, then each parent suffix: "edition.cnn.com" ->
+    ["edition.cnn.com", "cnn.com"]. News sites publish under regional/section
+    subdomains far more often than the seed table can enumerate, and without
+    this every such article silently fell back to the `unknown` tier score.
+    Stops before bare TLDs (needs >= 2 labels). More-specific entries win —
+    see the ordering logic in compute_credibility — so a deliberately seeded
+    subdomain (e.g. finance.yahoo.com) is never shadowed by a parent."""
+    parts = domain.split(".")
+    return [".".join(parts[i:]) for i in range(len(parts) - 1)]
+
+
 async def compute_credibility(session: AsyncSession, domain: str, llm_signal: float) -> float:
-    source = (await session.execute(select(Source).where(Source.domain == domain))).scalar_one_or_none()
+    candidates = _domain_candidates(domain)
+    source = None
+    if candidates:
+        rows = (
+            await session.execute(select(Source).where(Source.domain.in_(candidates)))
+        ).scalars().all()
+        by_domain = {row.domain: row for row in rows}
+        # candidates[] is ordered most-specific first; take the first hit.
+        source = next((by_domain[c] for c in candidates if c in by_domain), None)
     base = TIER_BASE_SCORE[source.reliability_tier] if source else TIER_BASE_SCORE[ReliabilityTier.unknown]
     llm_signal = max(0.0, min(1.0, llm_signal))
     return round(SOURCE_WEIGHT * base + LLM_SIGNAL_WEIGHT * llm_signal, 3)
