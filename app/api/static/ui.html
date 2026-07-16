@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>News Agent — UI</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; max-width: 760px; margin: 40px auto; padding: 0 20px; background: #0f1115; color: #e6e8eb; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  .sub { color: #8a8f98; font-size: 13px; margin-bottom: 20px; }
+  .tabs { display: flex; gap: 8px; border-bottom: 1px solid #2a2d34; margin-bottom: 20px; }
+  .tab { background: none; border: none; border-bottom: 2px solid transparent; color: #8a8f98; font-size: 14px; padding: 8px 12px; cursor: pointer; margin: 0; border-radius: 0; }
+  .tab.active { color: #e6e8eb; border-bottom-color: #4f7cff; }
+  fieldset { border: 1px solid #2a2d34; border-radius: 8px; padding: 16px; margin-bottom: 24px; }
+  legend { padding: 0 6px; color: #8a8f98; font-size: 13px; }
+  label { display: block; font-size: 13px; color: #b6bac2; margin: 10px 0 4px; }
+  input, textarea { width: 100%; box-sizing: border-box; background: #1a1d23; color: #e6e8eb; border: 1px solid #2a2d34; border-radius: 6px; padding: 8px 10px; font-size: 14px; }
+  textarea { min-height: 70px; resize: vertical; }
+  button { margin-top: 16px; background: #4f7cff; color: white; border: none; border-radius: 6px; padding: 10px 18px; font-size: 14px; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  #status { font-size: 13px; margin-top: 10px; min-height: 18px; }
+  #status.error { color: #ff6b6b; }
+  #status.ok { color: #5fd68f; }
+  #feed-section { display: none; }
+  .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid #2a2d34; border-top-color: #4f7cff; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 8px; vertical-align: -1px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .watching { color: #8a8f98; font-size: 13px; margin-bottom: 16px; }
+  .item { border: 1px solid #2a2d34; border-radius: 8px; padding: 14px 16px; margin-bottom: 12px; opacity: 0; animation: fadein 0.4s ease forwards; }
+  @keyframes fadein { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+  .item h3 { margin: 0 0 6px; font-size: 15px; }
+  .item a { color: #e6e8eb; text-decoration: none; }
+  .item a:hover { text-decoration: underline; }
+  .item p { margin: 6px 0; font-size: 13px; color: #b6bac2; }
+  .meta { display: flex; gap: 12px; font-size: 12px; color: #8a8f98; flex-wrap: wrap; }
+  .badge { background: #1a1d23; border: 1px solid #2a2d34; border-radius: 4px; padding: 2px 6px; }
+  .badge.market { border-color: #4f7cff; color: #9db4ff; }
+  details.apikey { margin-bottom: 20px; font-size: 13px; color: #8a8f98; }
+  details.apikey input { margin-top: 8px; }
+</style>
+</head>
+<body>
+  <h1>News Agent</h1>
+  <div class="sub">Subscribe prediction markets, watch their news feeds fill in live.</div>
+
+  <details class="apikey">
+    <summary>API key (only needed if the server sets API_KEY)</summary>
+    <input id="api_key" placeholder="paste the key from your .env — stored in this browser only">
+  </details>
+
+  <div class="tabs">
+    <button class="tab active" id="tab-btn-subscribe" onclick="switchTab('subscribe')">Subscribe &amp; watch</button>
+    <button class="tab" id="tab-btn-all" onclick="switchTab('all')">All news</button>
+  </div>
+
+  <section id="tab-subscribe">
+    <fieldset id="form-section">
+      <legend>Subscribe a market</legend>
+      <label for="market_id">Market ID</label>
+      <input id="market_id" placeholder="e.g. demo-market-1">
+
+      <label for="market_description">Market description (resolution criteria)</label>
+      <textarea id="market_description" placeholder="e.g. Will GTA 6 release before 2027-01-01?"></textarea>
+
+      <label for="poll_interval_minutes">Poll interval (minutes, optional)</label>
+      <input id="poll_interval_minutes" type="number" placeholder="default from server config">
+
+      <button id="submit-btn" onclick="subscribe()">Subscribe &amp; watch</button>
+      <div id="status"></div>
+    </fieldset>
+
+    <div id="feed-section">
+      <div class="watching"><span class="spinner"></span><span id="watching-text">Watching for news…</span></div>
+      <div id="feed"></div>
+    </div>
+  </section>
+
+  <section id="tab-all" style="display: none">
+    <div class="watching"><span class="spinner"></span><span id="all-watching-text">Loading news across all markets…</span></div>
+    <div id="all-feed"></div>
+  </section>
+
+<script>
+let pollTimer = null;
+let allPollTimer = null;
+const seenIds = new Set();
+// id -> DOM element per feed, so re-renders move nodes instead of recreating them
+const itemElements = new Map();
+const allItemElements = new Map();
+
+// --- API key (optional; required only when the server enforces API_KEY) ------
+const apiKeyInput = document.getElementById('api_key');
+apiKeyInput.value = localStorage.getItem('news-agent-api-key') || '';
+apiKeyInput.addEventListener('input', () => {
+  localStorage.setItem('news-agent-api-key', apiKeyInput.value.trim());
+});
+
+function authHeaders(extra = {}) {
+  const key = apiKeyInput.value.trim();
+  return key ? { ...extra, 'Authorization': `Bearer ${key}` } : extra;
+}
+
+// --- Tabs ---------------------------------------------------------------------
+function switchTab(name) {
+  document.getElementById('tab-subscribe').style.display = name === 'subscribe' ? 'block' : 'none';
+  document.getElementById('tab-all').style.display = name === 'all' ? 'block' : 'none';
+  document.getElementById('tab-btn-subscribe').classList.toggle('active', name === 'subscribe');
+  document.getElementById('tab-btn-all').classList.toggle('active', name === 'all');
+  if (name === 'all') startAllPolling();
+}
+
+function randomSecret() {
+  return crypto.randomUUID().replace(/-/g, '');
+}
+
+// --- Subscribe & watch one market ----------------------------------------------
+async function subscribe() {
+  const marketId = document.getElementById('market_id').value.trim();
+  const description = document.getElementById('market_description').value.trim();
+  const pollMinutes = document.getElementById('poll_interval_minutes').value;
+  const statusEl = document.getElementById('status');
+  const btn = document.getElementById('submit-btn');
+
+  if (!marketId || !description) {
+    statusEl.textContent = 'Market ID and description are required.';
+    statusEl.className = 'error';
+    return;
+  }
+
+  btn.disabled = true;
+  statusEl.textContent = 'Subscribing…';
+  statusEl.className = '';
+
+  const body = {
+    market_id: marketId,
+    market_description: description,
+    callback_url: `${location.origin}/ui/webhook`,
+    callback_secret: randomSecret(),
+  };
+  if (pollMinutes) body.poll_interval_minutes = parseInt(pollMinutes, 10);
+
+  try {
+    const resp = await fetch('/markets/subscribe', {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      statusEl.textContent = `Failed: ${resp.status} ${err.detail || ''}`;
+      statusEl.className = 'error';
+      btn.disabled = false;
+      return;
+    }
+    statusEl.textContent = 'Subscribed. Watching for news below.';
+    statusEl.className = 'ok';
+    document.getElementById('feed-section').style.display = 'block';
+    startPolling(marketId);
+  } catch (e) {
+    statusEl.textContent = `Network error: ${e}`;
+    statusEl.className = 'error';
+    btn.disabled = false;
+  }
+}
+
+function startPolling(marketId) {
+  if (pollTimer) clearInterval(pollTimer);
+  const poll = async () => {
+    try {
+      const resp = await fetch(`/markets/${encodeURIComponent(marketId)}/news`, { headers: authHeaders() });
+      if (!resp.ok) return;
+      const items = await resp.json();
+      items.forEach(item => seenIds.add(item.id));
+      document.getElementById('watching-text').textContent = seenIds.size > 0
+        ? `Watching for news… ${seenIds.size} item${seenIds.size === 1 ? '' : 's'} found so far`
+        : 'Watching for news… none yet';
+      renderFeed(items, document.getElementById('feed'), itemElements, { showMarket: false });
+    } catch (e) {
+      // Transient network hiccups shouldn't stop the poll loop.
+    }
+  };
+  poll();
+  pollTimer = setInterval(poll, 3000);
+}
+
+// --- All news across every market ------------------------------------------------
+function startAllPolling() {
+  if (allPollTimer) return; // already running; keep it running across tab switches
+  const poll = async () => {
+    try {
+      const resp = await fetch('/news?limit=200', { headers: authHeaders() });
+      if (!resp.ok) {
+        document.getElementById('all-watching-text').textContent =
+          resp.status === 401 ? 'Unauthorized — set the API key above.' : `Failed to load: ${resp.status}`;
+        return;
+      }
+      const items = await resp.json();
+      document.getElementById('all-watching-text').textContent = items.length > 0
+        ? `All markets — ${items.length} item${items.length === 1 ? '' : 's'}, newest first`
+        : 'All markets — no news stored yet';
+      renderFeed(items, document.getElementById('all-feed'), allItemElements, { showMarket: true });
+    } catch (e) {
+      // Transient network hiccups shouldn't stop the poll loop.
+    }
+  };
+  poll();
+  allPollTimer = setInterval(poll, 5000);
+}
+
+// --- Shared feed renderer -----------------------------------------------------------
+// The server already returns items sorted by publish date (newest first,
+// undated ones last) — render in that exact order instead of prepending
+// each poll's fresh arrivals. appendChild on an already-rendered element
+// moves it without recreating it, so existing items don't re-flash; only
+// genuinely new items get built and fade in.
+function renderFeed(items, feedEl, elMap, { showMarket }) {
+  items.forEach(item => {
+    let el = elMap.get(item.id);
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'item';
+      const published = item.published_at ? new Date(item.published_at).toLocaleString() : 'unknown date';
+      const marketBadge = showMarket && item.market_id
+        ? `<span class="badge market">${escapeHtml(item.market_id)}</span>` : '';
+      el.innerHTML = `
+        <h3><a href="${item.url}" target="_blank" rel="noopener">${escapeHtml(item.title)}</a></h3>
+        <p>${escapeHtml(item.summary)}</p>
+        <div class="meta">
+          ${marketBadge}
+          <span class="badge">${escapeHtml(item.source_domain)}</span>
+          <span class="badge">${published}</span>
+          <span class="badge">credibility ${item.credibility_score.toFixed(2)}</span>
+          <span class="badge">relevance ${item.relevance_score.toFixed(2)}</span>
+          <span class="badge">${escapeHtml(item.impact_hint)}</span>
+        </div>
+      `;
+      elMap.set(item.id, el);
+    }
+    feedEl.appendChild(el);
+  });
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+</script>
+</body>
+</html>

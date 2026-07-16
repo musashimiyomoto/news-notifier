@@ -36,6 +36,9 @@ class MarketResponse(BaseModel):
 
 class NewsItemResponse(BaseModel):
     id: str
+    # Filled by the global GET /news feed (items from many markets need the
+    # label); stays None on GET /markets/{id}/news where it's implied by the path.
+    market_id: str | None = None
     title: str
     summary: str
     url: str

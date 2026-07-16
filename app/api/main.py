@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 
 from app.api.routes.markets import router as markets_router
+from app.api.routes.news import router as news_router
 from app.api.routes.scrape_failures import router as scrape_failures_router
 from app.config import get_settings
 
@@ -30,6 +31,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.include_router(markets_router)
+app.include_router(news_router)
 app.include_router(scrape_failures_router)
 
 
@@ -38,15 +40,15 @@ async def health() -> dict:
     return {"status": "ok"}
 
 
-@app.get("/demo")
-async def demo_page() -> FileResponse:
-    return FileResponse(_STATIC_DIR / "demo.html")
+@app.get("/ui")
+async def ui_page() -> FileResponse:
+    return FileResponse(_STATIC_DIR / "ui.html")
 
 
-@app.post("/demo/webhook")
-async def demo_webhook(request: Request) -> dict:
-    """Sink for the demo page's callback_url — accepts and discards, so batch
-    delivery from the demo subscription succeeds instead of retrying against
+@app.post("/ui/webhook")
+async def ui_webhook(request: Request) -> dict:
+    """Sink for the UI page's callback_url — accepts and discards, so batch
+    delivery from a UI subscription succeeds instead of retrying against
     nothing. News items are still visible via GET /markets/{id}/news either way."""
     await request.body()
     return {"status": "ok"}

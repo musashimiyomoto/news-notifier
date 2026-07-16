@@ -121,7 +121,7 @@ Every `/markets/*` and `/scrape-failures` request requires
 per market, and PATCH can rewrite an existing market's `callback_url`, so an
 open endpoint on anything reachable outside your network is a resource-
 exhaustion / webhook-hijack risk. `API_KEY` unset disables the check, for
-local dev and the `/demo` page only.
+local dev and the `/ui` page only.
 
 ```bash
 curl -X POST localhost:8000/markets/subscribe \
@@ -160,7 +160,9 @@ and use the `Idempotency-Key` header (= `batch_id`) to dedupe retried
 deliveries on your side.
 
 `DELETE /markets/{market_id}` pauses polling; `PATCH /markets/{market_id}`
-updates description/resolution_date/callback/status.
+updates description/resolution_date/callback/status. `GET /news?limit=N`
+returns the latest stored news across **all** markets (each item tagged with
+its `market_id`) — this backs the "All news" tab of the built-in UI at `/ui`.
 
 ## Tests
 

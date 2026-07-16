@@ -39,7 +39,7 @@ Postgres and Memurai are already running as services. Open three PowerShell wind
 windows\start-llm.ps1
 # wait until http://127.0.0.1:8080/health returns OK
 
-# 2 — API  → http://localhost:8000  (demo: /demo)
+# 2 — API  → http://localhost:8000  (UI: /ui)
 windows\start-api.ps1
 
 # 3 — worker

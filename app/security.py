@@ -33,7 +33,7 @@ async def require_api_key(authorization: str | None = Header(None)) -> None:
     vector. PATCH can rewrite an existing market's callback_url/callback_secret,
     which would let an attacker who merely knows a market_id (not a secret —
     market ids are routinely public) hijack its webhook stream. Left disabled
-    (api_key=None) only for local dev / the demo page.
+    (api_key=None) only for local dev / the /ui page.
     """
     api_key = get_settings().api_key
     if api_key is None:
