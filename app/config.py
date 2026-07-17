@@ -23,23 +23,20 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_query_gen_model: str = "local"
     llm_extraction_model: str = "local"
-    # Per-request HTTP timeout for LLM calls. Local llama.cpp on CPU is slow
-    # (single-digit tokens/sec), so an extraction over a long article can take
-    # minutes — a tight timeout here makes every call raise ReadTimeout, which
-    # extract_and_score swallows, silently dropping every candidate. Keep this
-    # comfortably above a worst-case extraction; worker job_timeout must exceed it.
+    # Per-request HTTP timeout for LLM calls. GPU inference is normally quick,
+    # but the first request can include model warm-up. Keep enough headroom to
+    # avoid dropping a candidate on a transiently slow call; worker job_timeout
+    # must exceed this value.
     llm_request_timeout_seconds: int = 600
-    # Upper bound on article characters fed to the extraction prompt. Prompt-eval
-    # is the dominant CPU cost for llama.cpp, so this directly bounds latency.
-    # The lead of a news article carries almost all the resolution-relevant signal.
+    # Upper bound on article characters fed to the extraction prompt. This bounds
+    # prompt-evaluation latency and context/KV-cache use; the lead of a news
+    # article carries almost all the resolution-relevant signal.
     extraction_max_chars: int = 4000
-    # The default local model (Qwen3-1.7B, see docker-compose.yml) is a *reasoning*
-    # model: left alone it emits a long <think> block before the answer, ~2.5x the
-    # tokens for no quality gain on this extraction task. When true, the client
-    # passes chat_template_kwargs={"enable_thinking": false} to suppress it. Set
-    # false for a non-thinking model (e.g. the Qwen3-4B-Instruct alternative) or
-    # any backend whose chat template doesn't accept that kwarg (e.g. a cloud API).
-    llm_disable_thinking: bool = True
+    # The default Qwen3-4B-Instruct model is non-reasoning. When using a reasoning
+    # model such as Qwen3-1.7B/8B, set this true so the client passes
+    # chat_template_kwargs={"enable_thinking": false} and suppresses its long
+    # <think> block. Keep false for templates that do not accept that kwarg.
+    llm_disable_thinking: bool = False
 
     # Embeddings — computed locally via FastEmbed (ONNX), no external API call.
     # Changing the model changes embedding_dim, which requires a new migration

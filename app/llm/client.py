@@ -39,10 +39,9 @@ class LLMClient:
             "temperature": temperature,
         }
         if settings.llm_disable_thinking:
-            # Suppress the <think> block on reasoning models (e.g. the default
-            # local Qwen3-1.7B) — see Settings.llm_disable_thinking. Harmless to
-            # a non-thinking model whose template accepts it; disable the setting
-            # for backends whose chat template rejects the kwarg.
+            # Suppress the <think> block after switching to a reasoning model
+            # such as Qwen3-1.7B/8B. Keep this disabled for backends whose chat
+            # template rejects the kwarg.
             payload["chat_template_kwargs"] = {"enable_thinking": False}
         headers = {}
         if settings.llm_api_key:

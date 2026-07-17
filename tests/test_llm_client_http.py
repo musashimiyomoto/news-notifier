@@ -28,7 +28,7 @@ def _ok_response(content: dict) -> httpx.Response:
     return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(content)}}]})
 
 
-async def test_generate_json_sends_schema_temperature_and_thinking_suppression():
+async def test_generate_json_sends_schema_and_temperature():
     seen = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -47,10 +47,34 @@ async def test_generate_json_sends_schema_temperature_and_thinking_suppression()
     assert payload["temperature"] == 0.7
     assert payload["response_format"]["json_schema"]["schema"] == QUERY_GEN_SCHEMA
     assert payload["messages"][0] == {"role": "system", "content": "sys"}
-    # Default settings: llm_disable_thinking=True -> suppression kwarg present,
-    # and no API key -> no Authorization header.
-    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+    # The default 4B Instruct model does not accept/need a thinking-mode flag.
+    assert "chat_template_kwargs" not in payload
     assert "authorization" not in seen["headers"]
+
+
+async def test_generate_json_suppresses_thinking_when_enabled():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["json"] = json.loads(request.content)
+        return _ok_response({"queries": ["a"]})
+
+    settings = mock.Mock(
+        llm_base_url="http://test",
+        llm_request_timeout_seconds=10,
+        llm_disable_thinking=True,
+        llm_api_key="",
+    )
+    with (
+        mock.patch("app.llm.client.get_settings", return_value=settings),
+        _patched_client(httpx.MockTransport(handler)),
+    ):
+        await LLMClient().generate_json(
+            model="local", system="sys", prompt="prompt",
+            schema=QUERY_GEN_SCHEMA, name="query_gen",
+        )
+
+    assert seen["json"]["chat_template_kwargs"] == {"enable_thinking": False}
 
 
 async def test_generate_json_retries_transient_status_then_succeeds():
