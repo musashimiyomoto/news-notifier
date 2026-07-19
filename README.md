@@ -29,7 +29,7 @@ POST /markets/subscribe ─▶ Postgres (markets)
                                                               │
                                                      deliver_batch job
                                                               │
-                                              HMAC-signed webhook ─▶ callback_url
+                                         HMAC webhook + optional Telegram bot
 ```
 
 Two arq jobs, not one, on purpose: `process_market` does the (expensive,
@@ -257,6 +257,28 @@ Verify authenticity via the `X-Signature: sha256=<hmac>` header
 (HMAC-SHA256 of the raw request body, keyed with your `callback_secret`),
 and use the `Idempotency-Key` header (= `batch_id`) to dedupe retried
 deliveries on your side.
+
+### Telegram delivery
+
+To send every new article to a Telegram user, group, or channel in addition to
+the webhook, create a bot with `@BotFather` and set both values in `.env`:
+
+```ini
+TELEGRAM_BOT_TOKEN=123456789:replace-with-the-token-from-botfather
+TELEGRAM_CHAT_ID=-1001234567890
+```
+
+For a private chat, message the bot first and use that chat's numeric ID. For a
+channel, add the bot as an administrator and use either `@channel_name` or its
+numeric `-100...` ID. Restart the worker after changing these values:
+
+```bash
+./compose.sh cpu up -d --build api worker
+```
+
+Each article is sent as a separate message. Delivery progress is stored per
+channel, so retrying a Telegram failure does not resend the webhook or earlier
+messages from the same batch.
 
 `DELETE /markets/{market_id}` pauses polling; `PATCH /markets/{market_id}`
 updates description/resolution_date/callback/status. `GET /news?limit=N`

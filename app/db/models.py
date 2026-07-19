@@ -206,6 +206,8 @@ class DeliveryLog(Base):
     )
     status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    webhook_delivered: Mapped[bool] = mapped_column(Boolean, default=False)
+    telegram_sent_news_item_ids: Mapped[list[str]] = mapped_column(JSONB, default=list)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

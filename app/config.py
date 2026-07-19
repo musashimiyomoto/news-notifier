@@ -1,7 +1,7 @@
 from functools import lru_cache
 
 from cryptography.fernet import Fernet
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -87,6 +87,27 @@ class Settings(BaseSettings):
 
     # Delivery
     max_delivery_attempts: int = 6
+    telegram_bot_token: str | None = None
+    telegram_chat_id: str | None = None
+
+    @field_validator("telegram_bot_token", "telegram_chat_id", mode="before")
+    @classmethod
+    def _empty_delivery_setting_to_none(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return None
+        return value
+
+    @model_validator(mode="after")
+    def _validate_telegram_settings(self) -> "Settings":
+        if (self.telegram_bot_token is None) != (self.telegram_chat_id is None):
+            raise ValueError("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set together")
+        return self
+
+    @property
+    def telegram_enabled(self) -> bool:
+        return self.telegram_bot_token is not None and self.telegram_chat_id is not None
 
     # Scraping
     playwright_timeout_ms: int = 15_000

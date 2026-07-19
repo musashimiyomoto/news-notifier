@@ -11,6 +11,7 @@ from app.db.models import DeliveryLog, DeliveryStatus, ImpactHint, Market, Marke
 from app.db.session import async_session_factory
 from app.dedup.simhash import from_signed_64, hamming_distance, simhash, to_signed_64
 from app.dedup.vector_dedup import find_similar
+from app.delivery.telegram import format_telegram_news, send_telegram_message
 from app.delivery.webhook import send_webhook
 from app.llm.embeddings import embed_text
 from app.llm.extraction import extract_and_score
@@ -496,37 +497,68 @@ async def deliver_batch(ctx: dict, delivery_log_id: str) -> None:
                 for i in items
             ],
         }
-        callback_url = market.callback_url
-        callback_secret = decrypt_secret(market.callback_secret_encrypted)
-
-        status_code, error = await send_webhook(callback_url, callback_secret, payload)
-
         log.attempt += 1
-        if status_code is not None and 200 <= status_code < 300:
-            log.status = DeliveryStatus.success
+
+        async def record_failure(channel: str, status_code: int | None, error: str | None) -> bool:
             log.status_code = status_code
-            log.delivered_at = datetime.now(timezone.utc)
-            for item in items:
-                item.delivered = True
-            # Advance the watermark so future cycles hold back anything older
-            # than the newest article just delivered — see
-            # app.worker.tasks._filter_older_than_watermark. Undated items
-            # don't move it (nothing to compare against).
-            newest = max((i.published_at for i in items if i.published_at is not None), default=None)
-            if newest is not None and (
-                market.max_delivered_published_at is None or newest > market.max_delivered_published_at
-            ):
-                market.max_delivered_published_at = newest
+            log.error = f"{channel}: {error or f'HTTP {status_code}'}"
+            if log.attempt >= settings.max_delivery_attempts:
+                log.status = DeliveryStatus.dead_letter
+                await session.commit()
+                return True
+            log.status = DeliveryStatus.failed
             await session.commit()
-            return
+            return False
 
-        log.status_code = status_code
-        log.error = error
-        if log.attempt >= settings.max_delivery_attempts:
-            log.status = DeliveryStatus.dead_letter
+        # Persist channel progress separately. If Telegram fails after the
+        # webhook succeeded, the retry resumes at Telegram instead of emitting
+        # the same webhook again.
+        if not log.webhook_delivered:
+            callback_secret = decrypt_secret(market.callback_secret_encrypted)
+            status_code, error = await send_webhook(market.callback_url, callback_secret, payload)
+            if error is not None or status_code is None or not 200 <= status_code < 300:
+                dead_lettered = await record_failure("Webhook", status_code, error)
+                if dead_lettered:
+                    return
+                raise RuntimeError(f"Webhook delivery failed (status={status_code}, error={error})")
+            log.webhook_delivered = True
+            log.status_code = status_code
+            log.error = None
             await session.commit()
-            return  # give up silently here; TODO: surface dead-lettered batches via an admin endpoint/alert
 
-        log.status = DeliveryStatus.failed
+        if settings.telegram_enabled:
+            sent_item_ids = set(log.telegram_sent_news_item_ids)
+            for news, item in zip(payload["news"], items, strict=True):
+                item_id = str(item.id)
+                if item_id in sent_item_ids:
+                    continue
+                status_code, error = await send_telegram_message(
+                    settings.telegram_bot_token,
+                    settings.telegram_chat_id,
+                    format_telegram_news(market.external_market_id, news),
+                )
+                if error is not None or status_code is None or not 200 <= status_code < 300:
+                    dead_lettered = await record_failure("Telegram", status_code, error)
+                    if dead_lettered:
+                        return
+                    raise RuntimeError(f"Telegram delivery failed (status={status_code}, error={error})")
+                sent_item_ids.add(item_id)
+                # JSONB does not detect in-place list mutation; assign a new list.
+                log.telegram_sent_news_item_ids = [*log.telegram_sent_news_item_ids, item_id]
+                log.status_code = status_code
+                log.error = None
+                await session.commit()
+
+        log.status = DeliveryStatus.success
+        log.error = None
+        log.delivered_at = datetime.now(timezone.utc)
+        for item in items:
+            item.delivered = True
+        # Advance the watermark so future cycles hold back anything older than
+        # the newest article just delivered. Undated items don't move it.
+        newest = max((i.published_at for i in items if i.published_at is not None), default=None)
+        if newest is not None and (
+            market.max_delivered_published_at is None or newest > market.max_delivered_published_at
+        ):
+            market.max_delivered_published_at = newest
         await session.commit()
-        raise RuntimeError(f"Webhook delivery failed (status={status_code}, error={error})")
