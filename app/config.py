@@ -23,10 +23,10 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_query_gen_model: str = "local"
     llm_extraction_model: str = "local"
-    # Per-request HTTP timeout for LLM calls. GPU inference is normally quick,
-    # but the first request can include model warm-up. Keep enough headroom to
-    # avoid dropping a candidate on a transiently slow call; worker job_timeout
-    # must exceed this value.
+    # Per-request HTTP timeout for LLM calls. CPU inference can be slow and the
+    # first request can include model warm-up. Keep enough headroom to avoid
+    # dropping a candidate on a transiently slow call; worker job_timeout must
+    # exceed this value.
     llm_request_timeout_seconds: int = 600
     # Upper bound on article characters fed to the extraction prompt. This bounds
     # prompt-evaluation latency and context/KV-cache use; the lead of a news

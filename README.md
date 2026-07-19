@@ -56,7 +56,7 @@ crash or Redis eviction — rather than the primary driver of cadence.
 | Queue / scheduler | arq + Redis |
 | DB + vector store | PostgreSQL + pgvector |
 | Scraping | Playwright (Chromium) |
-| LLM | Local, NVIDIA GPU — llama.cpp CUDA serving Qwen3-4B-Instruct-2507 Q4_K_M by default (query generation + extraction/scoring). OpenAI-compatible, so pointing `LLM_BASE_URL` at OpenRouter/another provider needs no code changes — see `.env.example`. |
+| LLM | Local CPU or NVIDIA GPU — llama.cpp serving Qwen3-4B-Instruct-2507 Q4_K_M by default (query generation + extraction/scoring). OpenAI-compatible, so pointing `LLM_BASE_URL` at OpenRouter/another provider needs no code changes — see `.env.example`. |
 | Embeddings | Local, CPU — FastEmbed/ONNX (`BAAI/bge-small-en-v1.5`, 384 dims) |
 | Search | GDELT DOC 2.0 API + Google News RSS + DuckDuckGo (best-effort) |
 
@@ -65,20 +65,9 @@ English-only markets assumed (see `app/llm/*` system prompts and
 
 ## Linux setup (Docker — recommended)
 
-Install Docker Engine, the Compose plugin, and NVIDIA Container Toolkit. The
-NVIDIA driver must work inside Linux/WSL before Docker can use the GPU. Verify
-the host and Docker runtime:
-
-```bash
-docker --version
-docker compose version
-nvidia-smi
-docker run --rm --gpus all ubuntu nvidia-smi
-```
-
-The default is tuned for a GTX 1050 with 4 GB VRAM and about 10 GB system RAM.
-Leave at least 8 GB of free disk space for Docker images, the CUDA runtime,
-model cache, and application data.
+Install Docker Engine and the Compose plugin. CPU mode needs no additional
+runtime. For GPU mode, also install NVIDIA Container Toolkit; the NVIDIA driver
+must work inside Linux/WSL before Docker can use the GPU.
 
 ```bash
 # 1. Config
@@ -87,11 +76,17 @@ python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().
 # paste the output into SECRET_ENCRYPTION_KEY in .env
 # no LLM API key needed — the `llm` service serves a local model by default
 
-# 2. Build and start postgres, redis, llm, api, and worker
-docker compose up -d --build
+# 2a. Build and start with CPU inference
+./compose.sh cpu up -d --build
+
+# 2b. Or start with NVIDIA GPU inference
+./compose.sh gpu up -d --build
+
+# To start only the local LLM, add its service name:
+./compose.sh cpu up -d llm  # or: ./compose.sh gpu up -d llm
 
 # 3. Follow startup. The first model download can take several minutes.
-docker compose logs -f llm api worker
+./compose.sh cpu logs -f llm api worker  # use `gpu` here if started in GPU mode
 ```
 
 API is on `localhost:8000`. **First boot downloads the LLM's ~2.5GB model
@@ -99,38 +94,45 @@ file** (cached in the `llm_models` volume after that, so later restarts are
 fast) — the `worker` service waits on the `llm` healthcheck before starting,
 so nothing will hit it before it's actually ready.
 
-Useful Linux commands:
+`compose.sh` forwards everything after the mode to Docker Compose, so the same
+interface works for startup, logs, status, recreation, and shutdown. To switch
+modes, run the target mode's `up` command; Compose recreates `llm` with the
+selected image while retaining the shared model cache.
+
+Useful Linux commands (replace `cpu` with `gpu` for the GPU configuration):
 
 ```bash
-docker compose ps                       # service status
-docker compose logs -f worker           # worker logs
-docker compose restart api worker       # restart after an app config change
-docker compose down                     # stop containers, keep data/models
-docker compose down -v                  # also delete DB and model volumes
-docker compose up -d --build            # rebuild after a code/dependency change
+./compose.sh cpu ps                       # service status
+./compose.sh cpu logs -f worker           # worker logs
+./compose.sh cpu restart api worker       # restart after an app config change
+./compose.sh cpu down                     # stop containers, keep data/models
+./compose.sh cpu down -v                  # also delete DB and model volumes
+./compose.sh cpu up -d --build            # rebuild after a code/dependency change
 ```
 
 The API container applies Alembic migrations and seeds sources whenever it
 starts. To run those steps manually:
 
 ```bash
-docker compose exec api alembic upgrade head
-docker compose exec api python -m app.sources_seed
+./compose.sh cpu exec api alembic upgrade head
+./compose.sh cpu exec api python -m app.sources_seed
 ```
 
 ### Changing the local LLM model
 
 The llama.cpp Hugging Face model reference is configured in `.env`; there is
-no need to edit `docker-compose.yml`. Change these two values together:
+no need to edit either Compose file. Keep the model's thinking setting in sync
+with the model you select:
 
 ```ini
-# Default for a GTX 1050 with 4GB VRAM
+# Default model for both CPU and GPU modes
 LLM_HF_MODEL=bartowski/Qwen_Qwen3-4B-Instruct-2507-GGUF:Q4_K_M
 LLM_DISABLE_THINKING=false
+# Used only by the GPU configuration
 LLM_GPU_LAYERS=99
 ```
 
-For example, to trade quality for lower VRAM use and higher speed:
+For example, to trade quality for lower CPU/RAM/VRAM use and higher speed:
 
 ```ini
 LLM_HF_MODEL=bartowski/Qwen_Qwen3-1.7B-GGUF:Q4_K_M
@@ -140,8 +142,8 @@ LLM_DISABLE_THINKING=true
 Apply the change and watch the new model download/load:
 
 ```bash
-docker compose up -d --force-recreate llm worker
-docker compose logs -f llm
+./compose.sh cpu up -d --force-recreate llm worker  # or: ./compose.sh gpu ...
+./compose.sh cpu logs -f llm                        # use the selected mode
 curl --fail http://localhost:8080/health
 ```
 
@@ -149,14 +151,14 @@ The model is ready when the health request returns HTTP 200. The model files
 remain in the `llm_models` volume, so switching back does not normally download
 them again.
 
-Some compatible model references and practical guidance for this GPU:
+Some compatible model references and practical local-inference guidance:
 
 | Model reference | `LLM_DISABLE_THINKING` | Guidance |
 |---|---:|---|
-| `bartowski/Qwen_Qwen3-4B-Instruct-2507-GGUF:Q4_K_M` | `false` | Default; best quality/speed balance for 4 GB VRAM. |
-| `bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M` | `false` | Faster fallback with more VRAM headroom. |
-| `bartowski/Qwen_Qwen3-1.7B-GGUF:Q4_K_M` | `true` | Fastest and lightest, but weaker scoring. |
-| `bartowski/Qwen_Qwen3-8B-GGUF:Q4_K_M` | `true` | Not recommended: it cannot fit in 4 GB VRAM and CPU spill is very slow. |
+| `bartowski/Qwen_Qwen3-4B-Instruct-2507-GGUF:Q4_K_M` | `false` | Default; best quality balance, but slower on CPU. Fits a 4 GB GPU. |
+| `bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M` | `false` | Faster fallback with lower CPU and VRAM pressure. |
+| `bartowski/Qwen_Qwen3-1.7B-GGUF:Q4_K_M` | `true` | Fastest and lightest CPU/GPU option, but weaker scoring. |
+| `bartowski/Qwen_Qwen3-8B-GGUF:Q4_K_M` | `true` | Not recommended locally: too large for 4 GB VRAM and very slow on CPU. |
 
 For another GGUF model, use llama.cpp's `owner/repository:quantization`
 syntax. Prefer an Instruct model with a chat template and reliable structured
@@ -168,19 +170,22 @@ the LLM service.
 Local inference tuning also lives in `.env`:
 
 ```ini
-LLM_THREADS=2             # physical CPU cores assigned to one inference
+# Optional: defaults to 4 in CPU mode and 2 in GPU mode
+# LLM_THREADS=4           # physical CPU cores assigned to one inference
 LLM_PARALLEL=1            # simultaneous llama.cpp request slots
 LLM_CONTEXT_SIZE=4096     # total context shared by all slots
-LLM_GPU_LAYERS=99         # offload all model layers to NVIDIA CUDA
+LLM_GPU_LAYERS=99         # GPU mode only: offload all layers to CUDA
 EXTRACTION_MAX_CHARS=4000 # article text sent to the extraction prompt
 ```
 
-Keep `LLM_PARALLEL=1` and `LLM_CONTEXT_SIZE=4096` on a 4 GB card: another slot
-or a larger context increases KV-cache use and may cause an out-of-memory error.
+In CPU mode, set `LLM_THREADS` near the number of physical cores you want to
+dedicate to inference. In GPU mode, keep `LLM_PARALLEL=1` and
+`LLM_CONTEXT_SIZE=4096` on a 4 GB card: another slot or a larger context
+increases KV-cache use and may cause an out-of-memory error.
 `LLM_GPU_LAYERS=99` asks llama.cpp to offload every available layer. After
-changing the first four values, recreate `llm`; after changing
-`EXTRACTION_MAX_CHARS`, restart `worker`. Confirm GPU offload with
-`docker compose logs llm` (look for `offloaded ... layers to GPU`) and
+changing the first four values, recreate `llm` in the selected mode; after
+changing `EXTRACTION_MAX_CHARS`, restart `worker`. Confirm GPU offload with
+`./compose.sh gpu logs llm` (look for `offloaded ... layers to GPU`) and
 `nvidia-smi` (llama.cpp should occupy roughly 3–4 GB VRAM).
 
 ## Linux setup (native api/worker — faster local iteration)
@@ -189,7 +194,7 @@ changing the first four values, recreate `llm`; after changing
 cp .env.example .env   # localhost URLs are correct for native processes
 python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 # paste the output into SECRET_ENCRYPTION_KEY in .env
-docker compose up -d postgres redis llm
+./compose.sh cpu up -d postgres redis llm  # use `gpu` for CUDA inference
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 playwright install chromium
@@ -270,13 +275,3 @@ signing/delivery and the LLM client (both via `httpx.MockTransport`), and
 market PATCH side effects — with no live DB/LLM/network calls, so it runs
 without any of the infra above. CI (`.github/workflows/ci.yml`) runs the
 suite on Python 3.11 and 3.12 for every push and pull request.
-
-## Known MVP scope cuts (intentional, not oversights)
-
-- No conflict-flagging when two sources disagree — both are delivered as
-  separate items; reconciling is left to the consumer for now.
-- DuckDuckGo search has no official API — it's wrapped best-effort and can
-  silently return nothing if the unofficial scraper breaks upstream.
-- Dead-lettered deliveries (`delivery_log.status = dead_letter`) are not
-  surfaced anywhere yet — needs an admin endpoint or alert.
-- `published_at` parsing is best-effort per source and may be `null`.
